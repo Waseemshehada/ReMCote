@@ -22,10 +22,14 @@ WebRtcTransport::~WebRtcTransport() { CloseAll(); }
 
 std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const std::string& sessionId) {
     rtc::Configuration config;
-    // The native viewer is the offerer. Wait until its video m-line has been
-    // received and configured before creating our answer (see onTrack below).
-    // Otherwise libdatachannel generates an answer without our H.264 SSRC.
+    // The native viewer is the offerer. We configure its H.264 video m-line
+    // after applying the offer, then explicitly generate the host answer.
     config.disableAutoNegotiation = true;
+    // The native viewer's recvonly video m-line means the host adds its H.264
+    // sender after applying the offer. Without this, libdatachannel may build
+    // only the SCTP data transport, leaving control connected but never opening
+    // the SRTP video track.
+    config.forceMediaTransport = true;
     for (const auto& cfg : iceServers_) {
         rtc::IceServer srv(cfg.url);
         if (!cfg.username.empty())   srv.username = cfg.username;
