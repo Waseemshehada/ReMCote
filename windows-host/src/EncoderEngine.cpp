@@ -202,7 +202,7 @@ void EncoderEngine::Shutdown() {
     if (inputResource_) Api(api_)->nvEncUnregisterResource(encoder_, inputResource_);
     Api(api_)->nvEncDestroyEncoder(encoder_);
     encoder_ = nullptr;
-    delete api_;
+    delete static_cast<NV_ENCODE_API_FUNCTION_LIST*>(api_);  // void* must be cast before delete
     api_ = nullptr;
     if (hModule_) FreeLibrary(static_cast<HMODULE>(hModule_));
 }
