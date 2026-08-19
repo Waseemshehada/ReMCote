@@ -20,7 +20,7 @@ public:
     using ApprovalDecision = std::function<void(const std::string& sessionId, bool accept)>;
     using StopSession = std::function<void()>;
     using ExitRequest = std::function<void()>;
-    using ViewerRequest = std::function<void()>;
+    using ViewerRequest = std::function<void(const std::string& deviceId)>;
     using PeerDisconnected = std::function<void()>;
     using TelemetryProvider = std::function<PerformanceMonitor::Snapshot()>;
 
@@ -59,6 +59,7 @@ private:
     HWND allowBtn_ = nullptr;
     HWND declineBtn_ = nullptr;
     HWND stopBtn_ = nullptr;
+    HWND remoteDeviceEdit_ = nullptr;
     HWND viewerBtn_ = nullptr;
     HWND copyLogBtn_ = nullptr;
     HWND logView_ = nullptr;

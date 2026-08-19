@@ -11,7 +11,8 @@ enum ControlId {
     ID_DECLINE = 1002,
     ID_STOP = 1003,
     ID_VIEWER = 1004,
-    ID_COPY_LOG = 1005
+    ID_COPY_LOG = 1005,
+    ID_REMOTE_DEVICE = 1006
 };
 constexpr UINT WM_APP_REFRESH_LOG = WM_APP + 20;
 constexpr UINT WM_APP_REFRESH_UI = WM_APP + 21;
@@ -39,7 +40,7 @@ bool HostUI::Create(HINSTANCE hInstance) {
     hwnd_ = CreateWindowExW(
         0, L"ReMCoteHostWindow", L"ReMCote Desktop",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 580, 880,
+        CW_USEDEFAULT, CW_USEDEFAULT, 580, 950,
         nullptr, nullptr, hInstance, this);
     if (!hwnd_) return false;
 
@@ -58,7 +59,12 @@ bool HostUI::Create(HINSTANCE hInstance) {
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_DECLINE, hInstance, nullptr);
     stopBtn_ = CreateWindowW(L"BUTTON", L"STOP REMOTE SESSION",
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_STOP, hInstance, nullptr);
-    viewerBtn_ = CreateWindowW(L"BUTTON", L"CONNECT TO DEVICE",
+    remoteDeviceEdit_ = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_CENTER | ES_NUMBER | ES_AUTOHSCROLL,
+        0, 0, 0, 0, hwnd_, (HMENU)ID_REMOTE_DEVICE, hInstance, nullptr);
+    SendMessageW(remoteDeviceEdit_, EM_SETLIMITTEXT, 9, 0);
+    viewerBtn_ = CreateWindowW(L"BUTTON", L"CONNECT",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_VIEWER, hInstance, nullptr);
     copyLogBtn_ = CreateWindowW(L"BUTTON", L"COPY LOG",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_COPY_LOG, hInstance, nullptr);
@@ -70,6 +76,7 @@ bool HostUI::Create(HINSTANCE hInstance) {
     SendMessageW(allowBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(declineBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(stopBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
+    SendMessageW(remoteDeviceEdit_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(viewerBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(copyLogBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(logView_, WM_SETFONT, (WPARAM)fontLog_, TRUE);
@@ -105,9 +112,10 @@ void HostUI::Layout() {
     MoveWindow(declineBtn_, margin, 366, columnWidth, 54, TRUE);
     MoveWindow(allowBtn_, margin + columnWidth + gap, 366, columnWidth, 54, TRUE);
     MoveWindow(stopBtn_, margin, 366, contentWidth, 54, TRUE);
-    MoveWindow(viewerBtn_, margin, 466, columnWidth, 48, TRUE);
-    MoveWindow(copyLogBtn_, margin + columnWidth + gap, 466, columnWidth, 48, TRUE);
-    MoveWindow(logView_, margin, 560, contentWidth, std::max(180, clientHeight - 590), TRUE);
+    MoveWindow(remoteDeviceEdit_, margin, 466, contentWidth, 48, TRUE);
+    MoveWindow(viewerBtn_, margin, 530, columnWidth, 48, TRUE);
+    MoveWindow(copyLogBtn_, margin + columnWidth + gap, 530, columnWidth, 48, TRUE);
+    MoveWindow(logView_, margin, 628, contentWidth, std::max(180, clientHeight - 658), TRUE);
 }
 
 int HostUI::RunMessageLoop() {
@@ -192,7 +200,20 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         } else if (id == ID_STOP) {
             if (self->onStopSession_) self->onStopSession_();
         } else if (id == ID_VIEWER) {
-            if (self->onViewer_) self->onViewer_();
+            wchar_t buffer[32]{};
+            GetWindowTextW(self->remoteDeviceEdit_, buffer, static_cast<int>(std::size(buffer)));
+            std::string deviceId;
+            for (const wchar_t character : std::wstring(buffer)) {
+                if (character >= L'0' && character <= L'9')
+                    deviceId.push_back(static_cast<char>(character));
+            }
+            if (deviceId.size() != 9) {
+                self->SetStatusLine("Enter the 9-digit Device ID from the other computer");
+                SetFocus(self->remoteDeviceEdit_);
+                MessageBeep(MB_ICONWARNING);
+            } else if (self->onViewer_) {
+                self->onViewer_(deviceId);
+            }
         } else if (id == ID_COPY_LOG) {
             self->CopyLogsToClipboard();
         }
@@ -271,8 +292,8 @@ void HostUI::OnPaint(HDC hdc) {
         RenderText(hdc, 30, 316, L"REMOTE SESSION ACTIVE", green, fontBody_);
         RenderTextEllipsized(hdc, 30, 340, client.right - 60, buf, grey, fontBody_);
     }
-    RenderText(hdc, 30, 432, L"CONNECT FROM THIS APP", grey, fontBody_);
-    RenderText(hdc, 30, 528, L"DIAGNOSTIC LOG", grey, fontBody_);
+    RenderText(hdc, 30, 432, L"OTHER DEVICE'S ID", grey, fontBody_);
+    RenderText(hdc, 30, 596, L"DIAGNOSTIC LOG", grey, fontBody_);
 }
 
 // --- thread-safe setters ---------------------------------------------------

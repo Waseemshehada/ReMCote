@@ -26,7 +26,8 @@ public:
     DesktopViewer(const DesktopViewer&) = delete;
     DesktopViewer& operator=(const DesktopViewer&) = delete;
 
-    bool Open(HINSTANCE hInstance, const std::string& signalingUrl);
+    bool Open(HINSTANCE hInstance, const std::string& signalingUrl,
+              const std::string& initialDeviceId = {});
     void Close();
 
 private:
