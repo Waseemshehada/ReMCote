@@ -23,51 +23,13 @@ if(NVCODEC_SDK_DIR STREQUAL "")
   set(NVCODEC_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
 endif()
 
-# Microsoft Edge WebView2 SDK — auto-downloaded during configure if not present.
-# The static loader (WebView2LoaderStatic.lib) keeps the EXE self-contained.
-set(WEBVIEW2_SDK_VERSION "1.0.2792.45")
-set(WEBVIEW2_SDK_DIR "" CACHE PATH "Path to extracted Microsoft.Web.WebView2 NuGet package")
-if(WEBVIEW2_SDK_DIR STREQUAL "")
-  set(WEBVIEW2_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2")
-endif()
-
-if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
-  set(_wv2_nupkg "${CMAKE_CURRENT_BINARY_DIR}/webview2-sdk.zip")
-  message(STATUS "WebView2 SDK not found — downloading v${WEBVIEW2_SDK_VERSION}...")
-  # Use PowerShell Invoke-WebRequest + Expand-Archive instead of CMake's
-  # file(DOWNLOAD) + file(ARCHIVE_EXTRACT) because CMake's libarchive-based
-  # extractor can produce truncated output files on the Windows CI runner,
-  # which causes "missing semicolons" syntax errors inside WebView2.h.
-  execute_process(
-    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
-      "& { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${WEBVIEW2_SDK_VERSION}/microsoft.web.webview2.${WEBVIEW2_SDK_VERSION}.nupkg' -OutFile '${_wv2_nupkg}' -UseBasicParsing }"
-    RESULT_VARIABLE _wv2_dl_result
-    ERROR_VARIABLE  _wv2_dl_error
-  )
-  if(NOT _wv2_dl_result EQUAL 0)
-    message(FATAL_ERROR "WebView2 SDK download failed: ${_wv2_dl_error}")
-  endif()
-  execute_process(
-    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
-      "Expand-Archive -Path '${_wv2_nupkg}' -DestinationPath '${WEBVIEW2_SDK_DIR}' -Force"
-    RESULT_VARIABLE _wv2_ext_result
-    ERROR_VARIABLE  _wv2_ext_error
-  )
-  if(NOT _wv2_ext_result EQUAL 0)
-    message(FATAL_ERROR "WebView2 SDK extraction failed: ${_wv2_ext_error}")
-  endif()
-  if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
-    message(FATAL_ERROR "WebView2 SDK extraction failed — file not found: ${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
-  endif()
-  # Guard against silent truncation: WebView2.h must be at least 1.5 MB.
-  file(SIZE "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h" _wv2h_size)
-  if(_wv2h_size LESS 1500000)
-    message(FATAL_ERROR "WebView2.h appears truncated (${_wv2h_size} bytes, expected ~2 400 000). Delete ${WEBVIEW2_SDK_DIR} and re-run CMake to retry.")
-  endif()
-  message(STATUS "WebView2 SDK ready at ${WEBVIEW2_SDK_DIR} (WebView2.h: ${_wv2h_size} bytes)")
-endif()
+# WebView2 embedded viewer — temporarily disabled while the underlying MSVC
+# compile error in WebView2.h on the CI runner is investigated.
+# DesktopViewer.h/.cpp use a no-op stub for now; restore by re-enabling the
+# WebView2 SDK block below and linking WebView2LoaderStatic.lib.
 
 # Download WebView2 Runtime bootstrapper for the installer if not already present.
+# The installer still ships the Edge WebView2 runtime for the remote viewer web page.
 set(_wv2_bootstrapper "${CMAKE_CURRENT_SOURCE_DIR}/installer/MicrosoftEdgeWebview2Setup.exe")
 if(NOT EXISTS "${_wv2_bootstrapper}")
   message(STATUS "Downloading WebView2 Runtime bootstrapper for installer...")
@@ -98,7 +60,6 @@ add_executable(ReMCoteHost WIN32
 target_include_directories(ReMCoteHost PRIVATE
   src
   ${NVCODEC_SDK_DIR}
-  "${WEBVIEW2_SDK_DIR}/build/native/include"
 )
 
 target_link_libraries(ReMCoteHost PRIVATE
@@ -111,19 +72,12 @@ target_link_libraries(ReMCoteHost PRIVATE
   gdi32
   shell32
   ole32
-  oleaut32    # required by WebView2LoaderStatic
-  uuid        # required by WebView2LoaderStatic
-  version     # required by WebView2LoaderStatic (GetFileVersionInfo*)
-  shlwapi     # required by WebView2LoaderStatic (PathXxx helpers)
-  advapi32    # required by WebView2LoaderStatic (ETW EventXxx + Registry RegXxx)
-  "${WEBVIEW2_SDK_DIR}/build/native/x64/WebView2LoaderStatic.lib"
 )
 
 target_compile_definitions(ReMCoteHost PRIVATE
   UNICODE _UNICODE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
-  WEBVIEW2_STATIC
   _CRT_SECURE_NO_WARNINGS         # suppress C4996 deprecation on wcstombs etc.
   _CRT_NONSTDC_NO_WARNINGS        # suppress C4996 on POSIX-named functions
 )
