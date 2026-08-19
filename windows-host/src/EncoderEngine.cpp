@@ -9,6 +9,11 @@
 
 namespace remcote {
 
+// Convenience: cast the void* stored in the header back to the real type.
+static NV_ENCODE_API_FUNCTION_LIST* Api(void* p) {
+    return static_cast<NV_ENCODE_API_FUNCTION_LIST*>(p);
+}
+
 typedef NVENCSTATUS(NVENCAPI* PFN_NvEncodeAPICreateInstance)(NV_ENCODE_API_FUNCTION_LIST*);
 
 bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config) {
@@ -26,8 +31,8 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     if (!createInstance) return false;
 
     api_ = new NV_ENCODE_API_FUNCTION_LIST{};
-    api_->version = NV_ENCODE_API_FUNCTION_LIST_VER;
-    if (createInstance(api_) != NV_ENC_SUCCESS) {
+    Api(api_)->version = NV_ENCODE_API_FUNCTION_LIST_VER;
+    if (createInstance(Api(api_)) != NV_ENC_SUCCESS) {
         std::fprintf(stderr, "[NVENC] NvEncodeAPICreateInstance failed\n");
         return false;
     }
@@ -37,7 +42,7 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     open.device = device;
     open.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
     open.apiVersion = NVENCAPI_VERSION;
-    if (api_->nvEncOpenEncodeSessionEx(&open, &encoder_) != NV_ENC_SUCCESS) {
+    if (Api(api_)->nvEncOpenEncodeSessionEx(&open, &encoder_) != NV_ENC_SUCCESS) {
         std::fprintf(stderr, "[NVENC] open session failed\n");
         return false;
     }
@@ -59,7 +64,7 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     NV_ENC_PRESET_CONFIG presetCfg{};
     presetCfg.version = NV_ENC_PRESET_CONFIG_VER;
     presetCfg.presetCfg.version = NV_ENC_CONFIG_VER;
-    api_->nvEncGetEncodePresetConfigEx(encoder_, init.encodeGUID, init.presetGUID,
+    Api(api_)->nvEncGetEncodePresetConfigEx(encoder_, init.encodeGUID, init.presetGUID,
                                        init.tuningInfo, &presetCfg);
     NV_ENC_CONFIG encCfg = presetCfg.presetCfg;
     encCfg.gopLength = NVENC_INFINITE_GOPLENGTH;          // IDR only on demand
@@ -75,7 +80,7 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     encCfg.encodeCodecConfig.h264Config.sliceModeData = 0;
     init.encodeConfig = &encCfg;
 
-    if (api_->nvEncInitializeEncoder(encoder_, &init) != NV_ENC_SUCCESS) {
+    if (Api(api_)->nvEncInitializeEncoder(encoder_, &init) != NV_ENC_SUCCESS) {
         std::fprintf(stderr, "[NVENC] initialize failed\n");
         return false;
     }
@@ -100,12 +105,12 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     reg.width = config.width;
     reg.height = config.height;
     reg.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
-    if (api_->nvEncRegisterResource(encoder_, &reg) != NV_ENC_SUCCESS) return false;
+    if (Api(api_)->nvEncRegisterResource(encoder_, &reg) != NV_ENC_SUCCESS) return false;
     inputResource_ = reg.registeredResource;
 
     NV_ENC_CREATE_BITSTREAM_BUFFER bs{};
     bs.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
-    if (api_->nvEncCreateBitstreamBuffer(encoder_, &bs) != NV_ENC_SUCCESS) return false;
+    if (Api(api_)->nvEncCreateBitstreamBuffer(encoder_, &bs) != NV_ENC_SUCCESS) return false;
     bitstreamBuffer_ = bs.bitstreamBuffer;
 
     std::printf("[NVENC] initialized %dx%d @ %d fps, %d kbps CBR, ultra-low-latency\n",
@@ -124,7 +129,7 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
     NV_ENC_MAP_INPUT_RESOURCE map{};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = inputResource_;
-    if (api_->nvEncMapInputResource(encoder_, &map) != NV_ENC_SUCCESS) {
+    if (Api(api_)->nvEncMapInputResource(encoder_, &map) != NV_ENC_SUCCESS) {
         busy_ = false;
         return false;
     }
@@ -143,9 +148,9 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
     }
 
     // Synchronous encode: low-latency presets emit one output per input.
-    NVENCSTATUS st = api_->nvEncEncodePicture(encoder_, &pic);
+    NVENCSTATUS st = Api(api_)->nvEncEncodePicture(encoder_, &pic);
     if (st != NV_ENC_SUCCESS) {
-        api_->nvEncUnmapInputResource(encoder_, map.mappedResource);
+        Api(api_)->nvEncUnmapInputResource(encoder_, map.mappedResource);
         busy_ = false;
         return false;
     }
@@ -153,7 +158,7 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
     NV_ENC_LOCK_BITSTREAM lock{};
     lock.version = NV_ENC_LOCK_BITSTREAM_VER;
     lock.outputBitstream = bitstreamBuffer_;
-    if (api_->nvEncLockBitstream(encoder_, &lock) == NV_ENC_SUCCESS) {
+    if (Api(api_)->nvEncLockBitstream(encoder_, &lock) == NV_ENC_SUCCESS) {
         if (onOutput_) {
             EncodedFrame out;
             out.data = static_cast<const uint8_t*>(lock.bitstreamBufferPtr);
@@ -163,9 +168,9 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
             out.encodeDurationUs = NowUs() - encodeStart;
             onOutput_(out); // hand straight to WebRTC — no intermediate queue
         }
-        api_->nvEncUnlockBitstream(encoder_, bitstreamBuffer_);
+        Api(api_)->nvEncUnlockBitstream(encoder_, bitstreamBuffer_);
     }
-    api_->nvEncUnmapInputResource(encoder_, map.mappedResource);
+    Api(api_)->nvEncUnmapInputResource(encoder_, map.mappedResource);
     busy_ = false;
     return true;
 }
@@ -186,16 +191,16 @@ void EncoderEngine::SetBitrate(int kbps) {
     cfg.rcParams.maxBitRate = kbps * 2000;
     re.resetEncoder = 0;
     re.forceIDR = 0;
-    api_->nvEncReconfigureEncoder(encoder_, &re);
+    Api(api_)->nvEncReconfigureEncoder(encoder_, &re);
     config_.bitrateKbps = kbps;
     std::printf("[NVENC] bitrate reconfigured to %d kbps\n", kbps);
 }
 
 void EncoderEngine::Shutdown() {
     if (!api_ || !encoder_) return;
-    if (bitstreamBuffer_) api_->nvEncDestroyBitstreamBuffer(encoder_, bitstreamBuffer_);
-    if (inputResource_) api_->nvEncUnregisterResource(encoder_, inputResource_);
-    api_->nvEncDestroyEncoder(encoder_);
+    if (bitstreamBuffer_) Api(api_)->nvEncDestroyBitstreamBuffer(encoder_, bitstreamBuffer_);
+    if (inputResource_) Api(api_)->nvEncUnregisterResource(encoder_, inputResource_);
+    Api(api_)->nvEncDestroyEncoder(encoder_);
     encoder_ = nullptr;
     delete api_;
     api_ = nullptr;
