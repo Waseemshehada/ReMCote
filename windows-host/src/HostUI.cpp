@@ -1,5 +1,6 @@
 #include "HostUI.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <sstream>
 
@@ -38,7 +39,7 @@ bool HostUI::Create(HINSTANCE hInstance) {
     hwnd_ = CreateWindowExW(
         0, L"ReMCoteHostWindow", L"ReMCote Desktop",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 440, 820,
+        CW_USEDEFAULT, CW_USEDEFAULT, 580, 880,
         nullptr, nullptr, hInstance, this);
     if (!hwnd_) return false;
 
@@ -57,7 +58,7 @@ bool HostUI::Create(HINSTANCE hInstance) {
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_DECLINE, hInstance, nullptr);
     stopBtn_ = CreateWindowW(L"BUTTON", L"STOP REMOTE SESSION",
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_STOP, hInstance, nullptr);
-    viewerBtn_ = CreateWindowW(L"BUTTON", L"CONNECT TO ANOTHER DEVICE",
+    viewerBtn_ = CreateWindowW(L"BUTTON", L"CONNECT TO DEVICE",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_VIEWER, hInstance, nullptr);
     copyLogBtn_ = CreateWindowW(L"BUTTON", L"COPY LOG",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_COPY_LOG, hInstance, nullptr);
@@ -92,12 +93,19 @@ void HostUI::Layout() {
     ShowWindow(allowBtn_, requestPending ? SW_SHOW : SW_HIDE);
     ShowWindow(declineBtn_, requestPending ? SW_SHOW : SW_HIDE);
     ShowWindow(stopBtn_, sessionActive ? SW_SHOW : SW_HIDE);
-    MoveWindow(declineBtn_, 30, 360, 170, 54, TRUE);
-    MoveWindow(allowBtn_, 224, 360, 170, 54, TRUE);
-    MoveWindow(stopBtn_, 30, 360, 364, 54, TRUE);
-    MoveWindow(viewerBtn_, 30, 458, 178, 48, TRUE);
-    MoveWindow(copyLogBtn_, 216, 458, 178, 48, TRUE);
-    MoveWindow(logView_, 30, 540, 364, 220, TRUE);
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const int margin = 30;
+    const int contentWidth = std::max(360, client.right - margin * 2);
+    const int gap = 12;
+    const int columnWidth = (contentWidth - gap) / 2;
+
+    MoveWindow(declineBtn_, margin, 366, columnWidth, 54, TRUE);
+    MoveWindow(allowBtn_, margin + columnWidth + gap, 366, columnWidth, 54, TRUE);
+    MoveWindow(stopBtn_, margin, 366, contentWidth, 54, TRUE);
+    MoveWindow(viewerBtn_, margin, 466, columnWidth, 48, TRUE);
+    MoveWindow(copyLogBtn_, margin + columnWidth + gap, 466, columnWidth, 48, TRUE);
+    MoveWindow(logView_, margin, 560, contentWidth, std::max(180, client.bottom - 590), TRUE);
 }
 
 int HostUI::RunMessageLoop() {
@@ -212,6 +220,17 @@ static void RenderText(HDC hdc, int x, int y, const std::wstring& s, COLORREF co
     TextOutW(hdc, x, y, s.c_str(), (int)s.size());
 }
 
+static void RenderTextEllipsized(
+    HDC hdc, int x, int y, int width, const std::wstring& s,
+    COLORREF color, HFONT font) {
+    SelectObject(hdc, font);
+    SetTextColor(hdc, color);
+    SetBkMode(hdc, TRANSPARENT);
+    RECT rect{x, y, x + std::max(width, 1), y + 28};
+    DrawTextW(hdc, s.c_str(), static_cast<int>(s.size()), &rect,
+              DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
 void HostUI::OnPaint(HDC hdc) {
     std::lock_guard<std::mutex> lock(mutex_);
     const COLORREF white = RGB(238, 238, 242);
@@ -224,29 +243,34 @@ void HostUI::OnPaint(HDC hdc) {
     RenderText(hdc, 30, 78, L"THIS DEVICE", grey, fontBody_);
     RenderText(hdc, 30, 104, Widen(deviceId_), white, fontId_);
 
-    RenderText(hdc, 30, 166, online_ ? L"\u25CF ONLINE" : L"\u25CF OFFLINE",
-             online_ ? green : red, fontBody_);
-    RenderText(hdc, 30, 192, Widen(status_), grey, fontBody_);
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const int valueLeft = 150;
+    const int valueWidth = client.right - valueLeft - 30;
 
-    RenderText(hdc, 30, 236, L"GPU", grey, fontBody_);
-    RenderText(hdc, 90, 236, Widen(gpu_), white, fontBody_);
-    RenderText(hdc, 30, 262, L"Encoder", grey, fontBody_);
-    RenderText(hdc, 120, 262, Widen(encoder_), white, fontBody_);
+    RenderText(hdc, 30, 174, online_ ? L"\u25CF ONLINE" : L"\u25CF OFFLINE",
+             online_ ? green : red, fontBody_);
+    RenderTextEllipsized(hdc, 30, 204, client.right - 60, Widen(status_), grey, fontBody_);
+
+    RenderText(hdc, 30, 248, L"GPU", grey, fontBody_);
+    RenderTextEllipsized(hdc, valueLeft, 248, valueWidth, Widen(gpu_), white, fontBody_);
+    RenderText(hdc, 30, 278, L"Encoder", grey, fontBody_);
+    RenderTextEllipsized(hdc, valueLeft, 278, valueWidth, Widen(encoder_), white, fontBody_);
 
     if (requestPending_) {
-        RenderText(hdc, 30, 300, L"Incoming ReMCote Connection", white, fontBody_);
-        RenderText(hdc, 30, 324, L"Another computer is requesting access.", grey, fontBody_);
+        RenderText(hdc, 30, 316, L"Incoming ReMCote Connection", white, fontBody_);
+        RenderText(hdc, 30, 340, L"Another computer is requesting access.", grey, fontBody_);
     } else if (sessionActive_) {
         wchar_t buf[256];
         swprintf(buf, 256, L"Cap %.1fms  Enc %.1fms  %d/%d fps  drop %llu",
                  telemetry_.captureMs, telemetry_.encodeMs,
                  telemetry_.captureFps, telemetry_.encodeFps,
                  (unsigned long long)telemetry_.framesDropped);
-        RenderText(hdc, 30, 300, L"REMOTE SESSION ACTIVE", green, fontBody_);
-        RenderText(hdc, 30, 324, buf, grey, fontBody_);
+        RenderText(hdc, 30, 316, L"REMOTE SESSION ACTIVE", green, fontBody_);
+        RenderTextEllipsized(hdc, 30, 340, client.right - 60, buf, grey, fontBody_);
     }
-    RenderText(hdc, 30, 424, L"CONNECT FROM THIS APP", grey, fontBody_);
-    RenderText(hdc, 30, 512, L"DIAGNOSTIC LOG", grey, fontBody_);
+    RenderText(hdc, 30, 432, L"CONNECT FROM THIS APP", grey, fontBody_);
+    RenderText(hdc, 30, 528, L"DIAGNOSTIC LOG", grey, fontBody_);
 }
 
 // --- thread-safe setters ---------------------------------------------------

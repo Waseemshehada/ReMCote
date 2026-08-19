@@ -26,6 +26,14 @@
 #include "PerformanceMonitor.h"
 #include "WebRtcTransport.h"
 
+// Tell NVIDIA Optimus and AMD switchable graphics to run ReMCote on the
+// discrete GPU before DXGI chooses a device. NVENC cannot encode textures
+// created on an integrated-GPU D3D11 device.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+
 using namespace remcote;
 
 // ─── Signaling URL resolution ─────────────────────────────────────────────────
@@ -376,6 +384,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     Logger::Infof("Capture GPU: %s", app->capture.GpuName().c_str());
     Logger::Infof("Capture dimensions: %dx%d @ %d Hz",
                   app->capture.Width(), app->capture.Height(), app->capture.RefreshHz());
+
+    if (!app->capture.IsNvidiaAdapter()) {
+        std::wstring gpu;
+        const std::string gpuUtf8 = app->capture.GpuName();
+        if (!gpuUtf8.empty()) {
+            const int chars = MultiByteToWideChar(
+                CP_UTF8, 0, gpuUtf8.c_str(), -1, nullptr, 0);
+            if (chars > 1) {
+                gpu.resize(static_cast<size_t>(chars));
+                MultiByteToWideChar(
+                    CP_UTF8, 0, gpuUtf8.c_str(), -1, gpu.data(), chars);
+                if (!gpu.empty() && gpu.back() == L'\0') gpu.pop_back();
+            }
+        }
+        const std::wstring reason =
+            L"ReMCote found an NVIDIA GPU, but Windows assigned desktop "
+            L"capture to a different graphics adapter:\n\n" +
+            (gpu.empty() ? L"Unknown adapter" : gpu) +
+            L"\n\nOpen Windows Settings > System > Display > Graphics, add "
+            L"ReMCoteHost.exe, select Options, and choose High performance. "
+            L"Then restart ReMCote.";
+        return runViewerOnly(reason.c_str());
+    }
 
     EncoderConfig encoderProbe;
     encoderProbe.width = app->capture.Width();

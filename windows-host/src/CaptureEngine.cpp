@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -21,68 +22,110 @@ int64_t NowUs() {
 }
 
 bool CaptureEngine::Initialize() {
-    D3D_FEATURE_LEVEL level;
-    HRESULT hr = D3D11CreateDevice(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-        0, nullptr, 0, D3D11_SDK_VERSION,
-        device_.GetAddressOf(), &level, context_.GetAddressOf());
+    constexpr UINT kNvidiaVendorId = 0x10DE;
+
+    ComPtr<IDXGIFactory1> factory;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf()));
     if (FAILED(hr)) {
-        Logger::Errorf("Capture: D3D11CreateDevice failed (0x%08lx)", hr);
+        Logger::Errorf("Capture: CreateDXGIFactory1 failed (0x%08lx)", hr);
         return false;
     }
 
-    ComPtr<IDXGIDevice> dxgiDevice;
-    device_.As(&dxgiDevice);
-    ComPtr<IDXGIAdapter> adapter;
-    dxgiDevice->GetAdapter(adapter.GetAddressOf());
+    std::vector<ComPtr<IDXGIAdapter1>> adapters;
+    for (UINT index = 0;; ++index) {
+        ComPtr<IDXGIAdapter1> adapter;
+        const HRESULT enumResult = factory->EnumAdapters1(index, adapter.GetAddressOf());
+        if (enumResult == DXGI_ERROR_NOT_FOUND) break;
+        if (FAILED(enumResult)) continue;
 
-    DXGI_ADAPTER_DESC adapterDesc{};
-    adapter->GetDesc(&adapterDesc);
-    char name[256]{};
-    wcstombs_s(nullptr, name, sizeof(name), adapterDesc.Description, sizeof(name) - 1);
-    gpuName_ = name;
-
-    // Primary monitor only for MVP (spec §8).
-    ComPtr<IDXGIOutput> output;
-    if (FAILED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
-        Logger::Error("Capture: no primary display output was found");
-        return false;
-    }
-    ComPtr<IDXGIOutput1> output1;
-    output.As(&output1);
-
-    HRESULT dupHr = output1->DuplicateOutput(device_.Get(), duplication_.GetAddressOf());
-    if (FAILED(dupHr)) {
-        Logger::Errorf("Capture: DuplicateOutput failed (0x%08lx)", dupHr);
-        return false;
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(adapter->GetDesc1(&desc)) ||
+            (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+            continue;
+        }
+        // Put NVIDIA first. NVENC requires that the D3D11 texture belongs to
+        // the NVIDIA device, which matters on Optimus/hybrid GPU laptops.
+        if (desc.VendorId == kNvidiaVendorId) adapters.insert(adapters.begin(), adapter);
+        else adapters.push_back(adapter);
     }
 
-    DXGI_OUTDUPL_DESC dd{};
-    duplication_->GetDesc(&dd);
-    width_ = static_cast<int>(dd.ModeDesc.Width);
-    height_ = static_cast<int>(dd.ModeDesc.Height);
-    refreshHz_ = dd.ModeDesc.RefreshRate.Denominator
-        ? dd.ModeDesc.RefreshRate.Numerator / dd.ModeDesc.RefreshRate.Denominator
-        : 60;
+    for (const auto& adapter : adapters) {
+        DXGI_ADAPTER_DESC1 desc{};
+        adapter->GetDesc1(&desc);
+        char name[256]{};
+        wcstombs_s(nullptr, name, sizeof(name), desc.Description, sizeof(name) - 1);
 
-    // Single reusable GPU texture — our "queue" of depth 1 (spec §9).
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = dd.ModeDesc.Width;
-    td.Height = dd.ModeDesc.Height;
-    td.MipLevels = 1;
-    td.ArraySize = 1;
-    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    if (FAILED(device_->CreateTexture2D(&td, nullptr, stagingFrame_.GetAddressOf()))) {
-        Logger::Error("Capture: GPU frame texture creation failed");
-        return false;
+        ComPtr<ID3D11Device> candidateDevice;
+        ComPtr<ID3D11DeviceContext> candidateContext;
+        D3D_FEATURE_LEVEL level{};
+        const HRESULT deviceResult = D3D11CreateDevice(
+            adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+            0, nullptr, 0, D3D11_SDK_VERSION,
+            candidateDevice.GetAddressOf(), &level, candidateContext.GetAddressOf());
+        if (FAILED(deviceResult)) {
+            Logger::Warningf("Capture: D3D11 device failed on %s (0x%08lx)",
+                             name, deviceResult);
+            continue;
+        }
+
+        // Primary monitor only for MVP. A hybrid laptop may expose it only on
+        // one adapter, so keep trying adapters instead of accepting the default.
+        ComPtr<IDXGIOutput> output;
+        if (FAILED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
+            Logger::Infof("Capture: no display output on %s", name);
+            continue;
+        }
+        ComPtr<IDXGIOutput1> output1;
+        if (FAILED(output.As(&output1))) continue;
+
+        ComPtr<IDXGIOutputDuplication> candidateDuplication;
+        const HRESULT duplicationResult =
+            output1->DuplicateOutput(candidateDevice.Get(), candidateDuplication.GetAddressOf());
+        if (FAILED(duplicationResult)) {
+            Logger::Warningf("Capture: DuplicateOutput failed on %s (0x%08lx)",
+                             name, duplicationResult);
+            continue;
+        }
+
+        DXGI_OUTDUPL_DESC dd{};
+        candidateDuplication->GetDesc(&dd);
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = dd.ModeDesc.Width;
+        td.Height = dd.ModeDesc.Height;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+        ComPtr<ID3D11Texture2D> candidateFrame;
+        if (FAILED(candidateDevice->CreateTexture2D(
+                &td, nullptr, candidateFrame.GetAddressOf()))) {
+            Logger::Warningf("Capture: GPU frame texture failed on %s", name);
+            continue;
+        }
+
+        device_ = candidateDevice;
+        context_ = candidateContext;
+        duplication_ = candidateDuplication;
+        stagingFrame_ = candidateFrame;
+        gpuName_ = name;
+        adapterVendorId_ = desc.VendorId;
+        width_ = static_cast<int>(dd.ModeDesc.Width);
+        height_ = static_cast<int>(dd.ModeDesc.Height);
+        refreshHz_ = dd.ModeDesc.RefreshRate.Denominator
+            ? dd.ModeDesc.RefreshRate.Numerator / dd.ModeDesc.RefreshRate.Denominator
+            : 60;
+        Logger::Infof("Capture selected adapter: %s (vendor 0x%04X)",
+                      gpuName_.c_str(), adapterVendorId_);
+        Logger::Infof("Capture initialized: %dx%d @ %d Hz on %s",
+                      width_, height_, refreshHz_, gpuName_.c_str());
+        return true;
     }
 
-    Logger::Infof("Capture initialized: %dx%d @ %d Hz on %s",
-                  width_, height_, refreshHz_, gpuName_.c_str());
-    return true;
+    Logger::Error("Capture: no display adapter could initialize desktop duplication");
+    return false;
 }
 
 void CaptureEngine::Start(FrameCallback onFrame, CursorCallback onCursor) {
@@ -102,6 +145,7 @@ bool CaptureEngine::Reinitialize() {
     stagingFrame_.Reset();
     context_.Reset();
     device_.Reset();
+    adapterVendorId_ = 0;
     return Initialize();
 }
 

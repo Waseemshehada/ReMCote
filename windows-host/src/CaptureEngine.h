@@ -23,7 +23,10 @@ public:
     // Cursor metadata, sent separately from video when available (spec §20).
     using CursorCallback = std::function<void(float x, float y, bool visible)>;
 
-    bool Initialize(); // creates D3D11 device + IDXGIOutputDuplication (primary output)
+    // Creates a D3D11 device + IDXGIOutputDuplication for the primary output.
+    // NVIDIA adapters are preferred so the captured texture can be passed
+    // directly to NVENC on dual-GPU Windows laptops.
+    bool Initialize();
     void Start(FrameCallback onFrame, CursorCallback onCursor);
     void Stop();
 
@@ -33,6 +36,7 @@ public:
     int Height() const { return height_; }
     int RefreshHz() const { return refreshHz_; }
     std::string GpuName() const { return gpuName_; }
+    bool IsNvidiaAdapter() const { return adapterVendorId_ == 0x10DE; }
 
 private:
     void CaptureLoop();
@@ -50,6 +54,7 @@ private:
     int height_ = 0;
     int refreshHz_ = 0;
     std::string gpuName_;
+    unsigned int adapterVendorId_ = 0;
 };
 
 } // namespace remcote
