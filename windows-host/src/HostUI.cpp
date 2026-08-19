@@ -96,7 +96,9 @@ void HostUI::Layout() {
     RECT client{};
     GetClientRect(hwnd_, &client);
     const int margin = 30;
-    const int contentWidth = std::max(360, client.right - margin * 2);
+    const int clientWidth = static_cast<int>(client.right - client.left);
+    const int clientHeight = static_cast<int>(client.bottom - client.top);
+    const int contentWidth = std::max(360, clientWidth - margin * 2);
     const int gap = 12;
     const int columnWidth = (contentWidth - gap) / 2;
 
@@ -105,7 +107,7 @@ void HostUI::Layout() {
     MoveWindow(stopBtn_, margin, 366, contentWidth, 54, TRUE);
     MoveWindow(viewerBtn_, margin, 466, columnWidth, 48, TRUE);
     MoveWindow(copyLogBtn_, margin + columnWidth + gap, 466, columnWidth, 48, TRUE);
-    MoveWindow(logView_, margin, 560, contentWidth, std::max(180, client.bottom - 590), TRUE);
+    MoveWindow(logView_, margin, 560, contentWidth, std::max(180, clientHeight - 590), TRUE);
 }
 
 int HostUI::RunMessageLoop() {
