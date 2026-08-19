@@ -47,3 +47,10 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Windows Host — generated build/install artifacts (never commit binaries)
+windows-host/build/
+windows-host/dist/
+windows-host/third_party/vcpkg/buildtrees/
+windows-host/third_party/vcpkg/packages/
+windows-host/third_party/vcpkg/downloads/
