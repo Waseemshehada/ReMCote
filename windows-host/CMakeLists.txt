@@ -23,14 +23,48 @@ if(NVCODEC_SDK_DIR STREQUAL "")
   set(NVCODEC_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
 endif()
 
-# Microsoft Edge WebView2 SDK. The CI workflow downloads this pinned NuGet
-# package before configuring CMake; the static loader keeps the EXE self-contained.
+# Microsoft Edge WebView2 SDK — auto-downloaded during configure if not present.
+# The static loader (WebView2LoaderStatic.lib) keeps the EXE self-contained.
+set(WEBVIEW2_SDK_VERSION "1.0.2792.45")
 set(WEBVIEW2_SDK_DIR "" CACHE PATH "Path to extracted Microsoft.Web.WebView2 NuGet package")
 if(WEBVIEW2_SDK_DIR STREQUAL "")
   set(WEBVIEW2_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2")
 endif()
+
 if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
-  message(FATAL_ERROR "WebView2 SDK not found. Set WEBVIEW2_SDK_DIR or run the Windows build workflow.")
+  set(_wv2_nupkg "${CMAKE_CURRENT_BINARY_DIR}/webview2-sdk.zip")
+  message(STATUS "WebView2 SDK not found — downloading v${WEBVIEW2_SDK_VERSION}...")
+  file(DOWNLOAD
+    "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${WEBVIEW2_SDK_VERSION}/microsoft.web.webview2.${WEBVIEW2_SDK_VERSION}.nupkg"
+    "${_wv2_nupkg}"
+    SHOW_PROGRESS
+    STATUS _wv2_dl_status
+  )
+  list(GET _wv2_dl_status 0 _wv2_dl_code)
+  if(NOT _wv2_dl_code EQUAL 0)
+    message(FATAL_ERROR "WebView2 SDK download failed: ${_wv2_dl_status}")
+  endif()
+  file(ARCHIVE_EXTRACT INPUT "${_wv2_nupkg}" DESTINATION "${WEBVIEW2_SDK_DIR}")
+  if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
+    message(FATAL_ERROR "WebView2 SDK extraction failed — expected: ${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
+  endif()
+  message(STATUS "WebView2 SDK ready at ${WEBVIEW2_SDK_DIR}")
+endif()
+
+# Download WebView2 Runtime bootstrapper for the installer if not already present
+set(_wv2_bootstrapper "${CMAKE_CURRENT_SOURCE_DIR}/installer/MicrosoftEdgeWebview2Setup.exe")
+if(NOT EXISTS "${_wv2_bootstrapper}")
+  message(STATUS "Downloading WebView2 Runtime bootstrapper for installer...")
+  file(DOWNLOAD
+    "https://go.microsoft.com/fwlink/?LinkId=2124703"
+    "${_wv2_bootstrapper}"
+    SHOW_PROGRESS
+    STATUS _wv2b_status
+  )
+  list(GET _wv2b_status 0 _wv2b_code)
+  if(NOT _wv2b_code EQUAL 0)
+    message(WARNING "WebView2 Runtime bootstrapper download failed (code ${_wv2b_code}) — installer will not bundle it.")
+  endif()
 endif()
 
 add_executable(ReMCoteHost WIN32
