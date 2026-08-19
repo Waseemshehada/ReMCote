@@ -29,3 +29,9 @@ helper alongside other query options.
 Use `https://$REPLIT_DEV_DOMAIN/...`, and `wss://` for websockets. The `ws`
 package isn't resolvable from the repo root — run node test scripts from a
 package dir that depends on it (e.g. `artifacts/api-server`).
+
+## GitHub connector push gotchas (Aug 2026)
+- Replit GitHub OAuth token scopes: repo, read:org/user/project, user:email — **no `workflow` scope**, and reauth offers none. Any Git Data tree containing `.github/workflows/*` fails with a misleading **404** on POST /git/trees. Push everything else; the user must add workflow files via the GitHub web UI.
+- Connector proxyFetch takes paths only (`/repos/...`), rate-limited ~10 RPS per repl (429 with Retry-After).
+- Git Data API returns 409 "Git Repository is empty" on empty repos — seed with one Contents-API PUT first, then force-update the ref with an orphan commit.
+- `git ls-files -s` gives index blob shas/modes — blobs already uploaded can be reused without re-upload since shas are content-derived.
