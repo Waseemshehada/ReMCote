@@ -13,7 +13,8 @@
 
 #include "Common.h"
 
-struct NV_ENCODE_API_FUNCTION_LIST; // from nvEncodeAPI.h (defined in .cpp)
+// NV_ENCODE_API_FUNCTION_LIST is a typedef of an anonymous struct in nvEncodeAPI.h
+// and cannot be forward-declared. Keep it as void* here; cast in the .cpp.
 
 namespace remcote {
 
@@ -46,7 +47,7 @@ public:
 
 private:
     void* encoder_ = nullptr;                     // NVENC session handle
-    NV_ENCODE_API_FUNCTION_LIST* api_ = nullptr;  // dispatch table
+    void* api_ = nullptr;                         // NV_ENCODE_API_FUNCTION_LIST*, cast in .cpp
     void* inputResource_ = nullptr;               // registered D3D11 texture
     void* bitstreamBuffer_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> inputTexture_;
