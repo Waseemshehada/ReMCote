@@ -1,11 +1,9 @@
 {
   "name": "remcote-host",
   "version-string": "0.1.0",
+  "builtin-baseline": "ce613c41372b23b1f51333815feb3edd87ef8a8b",
   "dependencies": [
-    {
-      "name": "libdatachannel",
-      "features": ["media"]
-    },
+    "libdatachannel",
     "nlohmann-json"
   ]
 }
