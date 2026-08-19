@@ -34,36 +34,51 @@ endif()
 if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
   set(_wv2_nupkg "${CMAKE_CURRENT_BINARY_DIR}/webview2-sdk.zip")
   message(STATUS "WebView2 SDK not found — downloading v${WEBVIEW2_SDK_VERSION}...")
-  file(DOWNLOAD
-    "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${WEBVIEW2_SDK_VERSION}/microsoft.web.webview2.${WEBVIEW2_SDK_VERSION}.nupkg"
-    "${_wv2_nupkg}"
-    SHOW_PROGRESS
-    STATUS _wv2_dl_status
+  # Use PowerShell Invoke-WebRequest + Expand-Archive instead of CMake's
+  # file(DOWNLOAD) + file(ARCHIVE_EXTRACT) because CMake's libarchive-based
+  # extractor can produce truncated output files on the Windows CI runner,
+  # which causes "missing semicolons" syntax errors inside WebView2.h.
+  execute_process(
+    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
+      "& { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${WEBVIEW2_SDK_VERSION}/microsoft.web.webview2.${WEBVIEW2_SDK_VERSION}.nupkg' -OutFile '${_wv2_nupkg}' -UseBasicParsing }"
+    RESULT_VARIABLE _wv2_dl_result
+    ERROR_VARIABLE  _wv2_dl_error
   )
-  list(GET _wv2_dl_status 0 _wv2_dl_code)
-  if(NOT _wv2_dl_code EQUAL 0)
-    message(FATAL_ERROR "WebView2 SDK download failed: ${_wv2_dl_status}")
+  if(NOT _wv2_dl_result EQUAL 0)
+    message(FATAL_ERROR "WebView2 SDK download failed: ${_wv2_dl_error}")
   endif()
-  file(ARCHIVE_EXTRACT INPUT "${_wv2_nupkg}" DESTINATION "${WEBVIEW2_SDK_DIR}")
+  execute_process(
+    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
+      "Expand-Archive -Path '${_wv2_nupkg}' -DestinationPath '${WEBVIEW2_SDK_DIR}' -Force"
+    RESULT_VARIABLE _wv2_ext_result
+    ERROR_VARIABLE  _wv2_ext_error
+  )
+  if(NOT _wv2_ext_result EQUAL 0)
+    message(FATAL_ERROR "WebView2 SDK extraction failed: ${_wv2_ext_error}")
+  endif()
   if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
-    message(FATAL_ERROR "WebView2 SDK extraction failed — expected: ${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
+    message(FATAL_ERROR "WebView2 SDK extraction failed — file not found: ${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
   endif()
-  message(STATUS "WebView2 SDK ready at ${WEBVIEW2_SDK_DIR}")
+  # Guard against silent truncation: WebView2.h must be at least 1.5 MB.
+  file(SIZE "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h" _wv2h_size)
+  if(_wv2h_size LESS 1500000)
+    message(FATAL_ERROR "WebView2.h appears truncated (${_wv2h_size} bytes, expected ~2 400 000). Delete ${WEBVIEW2_SDK_DIR} and re-run CMake to retry.")
+  endif()
+  message(STATUS "WebView2 SDK ready at ${WEBVIEW2_SDK_DIR} (WebView2.h: ${_wv2h_size} bytes)")
 endif()
 
-# Download WebView2 Runtime bootstrapper for the installer if not already present
+# Download WebView2 Runtime bootstrapper for the installer if not already present.
 set(_wv2_bootstrapper "${CMAKE_CURRENT_SOURCE_DIR}/installer/MicrosoftEdgeWebview2Setup.exe")
 if(NOT EXISTS "${_wv2_bootstrapper}")
   message(STATUS "Downloading WebView2 Runtime bootstrapper for installer...")
-  file(DOWNLOAD
-    "https://go.microsoft.com/fwlink/?LinkId=2124703"
-    "${_wv2_bootstrapper}"
-    SHOW_PROGRESS
-    STATUS _wv2b_status
+  execute_process(
+    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
+      "& { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2124703' -OutFile '${_wv2_bootstrapper}' -UseBasicParsing }"
+    RESULT_VARIABLE _wv2b_result
+    ERROR_VARIABLE  _wv2b_error
   )
-  list(GET _wv2b_status 0 _wv2b_code)
-  if(NOT _wv2b_code EQUAL 0)
-    message(WARNING "WebView2 Runtime bootstrapper download failed (code ${_wv2b_code}) — installer will not bundle it.")
+  if(NOT _wv2b_result EQUAL 0)
+    message(WARNING "WebView2 Runtime bootstrapper download failed (${_wv2b_error}) — installer will not bundle it.")
   endif()
 endif()
 
