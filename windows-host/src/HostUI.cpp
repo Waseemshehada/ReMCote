@@ -14,6 +14,7 @@ enum ControlId {
 };
 constexpr UINT WM_APP_REFRESH_LOG = WM_APP + 20;
 constexpr UINT WM_APP_REFRESH_UI = WM_APP + 21;
+constexpr UINT WM_APP_PEER_DISCONNECTED = WM_APP + 22;
 
 static std::wstring Widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -154,6 +155,9 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+    case WM_APP_PEER_DISCONNECTED:
+        if (self->onPeerDisconnected_) self->onPeerDisconnected_();
+        return 0;
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
         std::string sid;
@@ -195,6 +199,10 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void HostUI::NotifyPeerDisconnected() {
+    if (hwnd_) PostMessageW(hwnd_, WM_APP_PEER_DISCONNECTED, 0, 0);
 }
 
 static void RenderText(HDC hdc, int x, int y, const std::wstring& s, COLORREF color, HFONT font) {

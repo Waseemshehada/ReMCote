@@ -1,5 +1,5 @@
 // ReMCote Host — entry point. Wires capture -> encode -> WebRTC and
-// browser input -> SendInput, gated behind explicit Host approval.
+// native viewer input -> SendInput, gated behind explicit Host approval.
 //
 // Threads (spec §17): capture, encoder (runs inside capture callback but on a
 // dedicated encode submission), WebRTC/network (libdatachannel), input
@@ -145,9 +145,15 @@ static int CiSelfTest() {
                 nvenc ? "PRESENT" : "ABSENT");
     if (nvenc) FreeLibrary(nvenc);
 
-    // Test 4: WebView2 Runtime — skipped; embedded viewer is disabled while the
-    // WebView2.h MSVC CI compile issue is under investigation.  Users still get
-    // the WebView2 runtime via the installer bootstrapper for the web viewer.
+    // Test 4: Windows' built-in Media Foundation decoder runtime used by the
+    // native viewer. No browser or WebView2 runtime is required.
+    HMODULE mfplat = LoadLibraryW(L"mfplat.dll");
+    HMODULE codec = LoadLibraryW(L"msmpeg2vdec.dll");
+    std::printf("[TEST] Media Foundation runtime   %s\n",
+                mfplat && codec ? "PASS" : "FAIL");
+    if (mfplat) FreeLibrary(mfplat);
+    if (codec) FreeLibrary(codec);
+    if (!mfplat || !codec) pass = false;
 
     std::printf("=== CI Self-Test: %s ===\n", pass ? "PASS" : "FAIL");
     return pass ? 0 : 1;
@@ -250,7 +256,7 @@ struct HostApp {
         Logger::Info("Remote session pipeline is active");
     }
 
-    void StopPipeline(const std::string& reason) {
+    void StopPipeline(const std::string& reason, bool notifyPeer = true) {
         if (!pipelineRunning.exchange(false)) {
             approved = false;
             return;
@@ -260,7 +266,7 @@ struct HostApp {
         encoder.Shutdown();
         approved = false;
         if (rtc) rtc->CloseAll();
-        if (registration && !activeSessionId.empty())
+        if (notifyPeer && registration && !activeSessionId.empty())
             registration->NotifySessionClosed(activeSessionId, reason);
         activeSessionId.clear();
         ui.OnSessionActive(false);
@@ -272,8 +278,12 @@ struct HostApp {
         if (shutdownStarted.exchange(true)) return;
         Logger::Info("ReMCote Desktop is shutting down");
         viewer.Close();
-        StopPipeline("Application closed");
+        if (registration && !activeSessionId.empty()) {
+            registration->NotifySessionClosed(
+                activeSessionId, "Application closed");
+        }
         if (registration) registration->Stop();
+        StopPipeline("Application closed", false);
         rtc.reset();
         registration.reset();
         Logger::Info("All host services stopped");
@@ -331,31 +341,57 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     }
     app->ui.RefreshLogView();
 
-    app->ui.SetViewerRequest([&app, hInstance] {
-        app->viewer.Open(hInstance, L"https://remcote.replit.app/?desktop=1");
+    app->ui.SetViewerRequest([&app, hInstance, signalingUrl = sig.url] {
+        app->viewer.Open(hInstance, signalingUrl);
     });
     app->ui.SetStopSession([&app] { app->StopPipeline("Host stopped the session"); });
+    app->ui.SetPeerDisconnected(
+        [&app] { app->StopPipeline("Peer disconnected"); });
     app->ui.SetExitRequest([&app] {
         app->Shutdown();
     });
     app->ui.SetTelemetryProvider([&app] { return app->perf.Sample(); });
 
-    if (!app->capture.Initialize()) {
-        Logger::Warning("DXGI desktop duplication is unavailable; starting viewer-only mode");
+    auto runViewerOnly = [&app](const wchar_t* reason) {
+        Logger::Warning("Host prerequisites unavailable; starting viewer-only mode");
         app->ui.SetGpuInfo("Host unavailable", "Viewer ready");
         app->ui.SetStatusLine("Viewer mode: connect to another device");
-        MessageBoxW(nullptr,
-                    L"This computer cannot host a ReMCote session because screen capture is unavailable.\n\n"
-                    L"You can still use it to connect to another ReMCote device.",
-                    L"ReMCote Desktop", MB_ICONINFORMATION);
+        MessageBoxW(
+            nullptr,
+            reason,
+            L"ReMCote Desktop",
+            MB_ICONINFORMATION);
         const int rc = app->ui.RunMessageLoop();
         app->Shutdown();
         return rc;
+    };
+
+    if (!app->capture.Initialize()) {
+        return runViewerOnly(
+            L"This computer cannot host a ReMCote session because screen "
+            L"capture is unavailable.\n\n"
+            L"You can still use it to connect to another ReMCote device.");
     }
     Logger::Info("DXGI desktop duplication initialized");
     Logger::Infof("Capture GPU: %s", app->capture.GpuName().c_str());
     Logger::Infof("Capture dimensions: %dx%d @ %d Hz",
                   app->capture.Width(), app->capture.Height(), app->capture.RefreshHz());
+
+    EncoderConfig encoderProbe;
+    encoderProbe.width = app->capture.Width();
+    encoderProbe.height = app->capture.Height();
+    encoderProbe.fps =
+        app->capture.RefreshHz() > 0 ? app->capture.RefreshHz() : 60;
+    encoderProbe.bitrateKbps = 20000;
+    encoderProbe.maxBitrateKbps = 80000;
+    if (!app->encoder.Initialize(app->capture.Device(), encoderProbe)) {
+        return runViewerOnly(
+            L"This computer cannot host a ReMCote session because a compatible "
+            L"NVIDIA NVENC encoder is unavailable.\n\n"
+            L"You can still use it to connect to another ReMCote device.");
+    }
+    app->encoder.Shutdown();
+    Logger::Info("NVENC host capability probe succeeded");
 
     HostCapabilities caps;
     caps.h264 = true;
@@ -376,15 +412,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
             app->ui.SetDeviceId(id);
             app->ui.SetOnline(true);
             app->ui.SetStatusLine("Ready for connection");
-            app->rtc = std::make_unique<WebRtcTransport>(app->input, iceServers);
-            app->rtc->SetSignalOut([&app](const std::string& sid, const nlohmann::json& payload) {
-                app->registration->SendSignal(sid, payload);
-            });
-            app->rtc->SetBitrateRequest([&app](int kbps) { app->encoder.SetBitrate(kbps); });
-            app->rtc->SetKeyframeRequest([&app] { app->encoder.RequestKeyframe(); });
-            app->rtc->SetSessionEnded([&app](const std::string&) {
-                app->StopPipeline("Peer disconnected");
-            });
+             // Re-registration after a signaling reconnect must not replace a
+             // live WebRTC transport or discard its pending peer session.
+             if (!app->rtc) {
+                 app->rtc = std::make_unique<WebRtcTransport>(app->input, iceServers);
+                 app->rtc->SetSignalOut([&app](const std::string& sid, const nlohmann::json& payload) {
+                     app->registration->SendSignal(sid, payload);
+                 });
+                 app->rtc->SetBitrateRequest([&app](int kbps) { app->encoder.SetBitrate(kbps); });
+                 app->rtc->SetKeyframeRequest([&app] { app->encoder.RequestKeyframe(); });
+                  app->rtc->SetSessionEnded([&app](const std::string&) {
+                      app->ui.NotifyPeerDisconnected();
+                 });
+             }
         });
 
     app->registration->SetOnConnectRequest(

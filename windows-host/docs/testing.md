@@ -1,8 +1,8 @@
 # ReMCote — Testing the Real Pipeline
 
-Success is **not** "the frontend loads" or "browser-to-browser WebRTC works."
-The milestone is a real Windows desktop streamed to a browser with responsive
-input, gated by explicit Host approval.
+Success is **not** just "signaling connects" or "a Device ID is shown."
+The milestone is a real Windows desktop streamed to the native Windows viewer
+with responsive input, gated by explicit Host approval.
 
 ## Two-machine end-to-end test
 **PC A (Host)**
@@ -12,8 +12,9 @@ input, gated by explicit Host approval.
    `NVENC Ready`.
 
 **PC B (Client)**
-3. Open the ReMCote website.
-4. Enter PC A's Device ID and click **Connect**.
+3. Install and run the same `ReMCoteHost.exe`.
+4. Click **CONNECT TO ANOTHER DEVICE**, enter PC A's Device ID, and click
+   **CONNECT**.
 
 **PC A**
 5. A visible *Incoming ReMCote Connection* prompt appears. Click **ALLOW**.
@@ -30,8 +31,9 @@ input, gated by explicit Host approval.
    - playing 60 FPS content
    - Premiere timeline scrubbing, Space, J/K/L (if available)
 
-## Performance HUD checks
-Open the HUD on the session page. Every value must be **real**:
+## Performance telemetry checks
+Inspect the native viewer status and Host telemetry. Every value must be
+**real**:
 - Resolution, FPS, codec (H.264), bitrate, RTT, jitter, packet loss,
   frames received/dropped, DIRECT vs RELAY.
 - Input RTT (from the `ping`/`pong` probe) updates continuously.
@@ -41,7 +43,7 @@ Open the HUD on the session page. Every value must be **real**:
 - **STOP REMOTE SESSION** on the Host immediately kills video + input and
   returns to Ready.
 - Closing `ReMCoteHost.exe` terminates access immediately.
-- Killing the Host process mid-session: the browser shows a real
+- Killing the Host process mid-session: the native viewer shows a real
   `DISCONNECTED`/`FAILED` state, never a fake connected view.
 
 ## Control-plane checks (works today, without the Host)

@@ -21,6 +21,7 @@ public:
     using StopSession = std::function<void()>;
     using ExitRequest = std::function<void()>;
     using ViewerRequest = std::function<void()>;
+    using PeerDisconnected = std::function<void()>;
     using TelemetryProvider = std::function<PerformanceMonitor::Snapshot()>;
 
     bool Create(HINSTANCE hInstance);
@@ -36,11 +37,15 @@ public:
     void ShowConnectionRequest(const std::string& sessionId, const std::string& description);
     void OnSessionActive(bool active);
     void UpdateTelemetry(const PerformanceMonitor::Snapshot& snap);
+    void NotifyPeerDisconnected();
 
     void SetApprovalDecision(ApprovalDecision cb) { onApproval_ = std::move(cb); }
     void SetStopSession(StopSession cb) { onStopSession_ = std::move(cb); }
     void SetExitRequest(ExitRequest cb) { onExit_ = std::move(cb); }
     void SetViewerRequest(ViewerRequest cb) { onViewer_ = std::move(cb); }
+    void SetPeerDisconnected(PeerDisconnected cb) {
+        onPeerDisconnected_ = std::move(cb);
+    }
     void SetTelemetryProvider(TelemetryProvider cb) { telemetryProvider_ = std::move(cb); }
 
 private:
@@ -82,6 +87,7 @@ private:
     StopSession onStopSession_;
     ExitRequest onExit_;
     ViewerRequest onViewer_;
+    PeerDisconnected onPeerDisconnected_;
     TelemetryProvider telemetryProvider_;
 };
 

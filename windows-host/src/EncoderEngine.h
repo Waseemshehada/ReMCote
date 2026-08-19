@@ -56,7 +56,8 @@ private:
     OutputCallback onOutput_;
     std::atomic<bool> busy_{false};   // the 1-frame "queue"
     std::atomic<bool> forceIdr_{true};
-    std::mutex reconfigureMutex_;
+    // NVENC does not allow encode/reconfigure/destroy calls to overlap.
+    std::mutex operationMutex_;
     void* hModule_ = nullptr; // nvEncodeAPI64.dll
 };
 

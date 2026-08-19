@@ -41,8 +41,12 @@ export class RemoteSession {
   private pingTimer: number | null = null;
   private closed = false;
   private iceRestarting = false;
+  private webRtcStarting = false;
   private remoteDescriptionSet = false;
   private pendingCandidates: SignalPayload[] = [];
+  private localOfferSent = false;
+  private pendingLocalCandidates: SignalPayload[] = [];
+  private failureReported = false;
 
   state: SessionState = "OFFLINE";
   capabilities: HostCapabilities | null = null;
@@ -55,14 +59,61 @@ export class RemoteSession {
   async start(): Promise<void> {
     this.setState("CONNECTING", "Finding device");
     this.unsubscribe = this.signaling.subscribe((m) => this.onSignalingMessage(m));
+    this.signaling.onStatus = (connected) =>
+      this.onSignalingStatus(connected);
     this.signaling.connect();
-    await this.signaling.waitForOpen();
+    await Promise.race([
+      this.signaling.waitForOpen(),
+      new Promise<never>((_, reject) =>
+        window.setTimeout(
+          () => reject(new Error("Could not reach the signaling service")),
+          8_000,
+        ),
+      ),
+    ]);
     this.signaling.send({ type: "client-connect-request", publicDeviceId: this.deviceId });
   }
 
   private setState(state: SessionState, message?: string) {
     this.state = state;
     this.events.onState(state, message);
+  }
+
+  private onSignalingStatus(connected: boolean) {
+    if (this.closed) return;
+    if (connected) {
+      if (this.sessionId && this.sessionToken) {
+        // This is deliberately sent before SignalingClient flushes queued
+        // SDP/ICE so the server rebinds the session to this socket first.
+        this.signaling.send({
+          type: "client-resume-session",
+          sessionId: this.sessionId,
+          sessionToken: this.sessionToken,
+        });
+      }
+      return;
+    }
+    if (
+      this.state === "AWAITING_APPROVAL" ||
+      this.state === "NEGOTIATING"
+    ) {
+      this.setState(this.state, "Reconnecting to signaling service");
+    }
+  }
+
+  private reportConnectionFailure(reason: string) {
+    if (this.failureReported) return;
+    this.failureReported = true;
+    if (this.sessionId && this.sessionToken) {
+      this.signaling.send({
+        type: "client-session-closed",
+        sessionId: this.sessionId,
+        sessionToken: this.sessionToken,
+        reason,
+      });
+    }
+    this.teardownPeer();
+    this.setState("FAILED", reason);
   }
 
   private onSignalingMessage(msg: ServerToClient) {
@@ -78,9 +129,21 @@ export class RemoteSession {
         this.capabilities = msg.hostCapabilities;
         this.events.onCapabilities?.(msg.hostCapabilities);
       }
-      if (msg.state === "NEGOTIATING" && !this.pc) {
+      if (
+        msg.state === "NEGOTIATING" &&
+        !this.pc &&
+        !this.webRtcStarting
+      ) {
         this.setState("NEGOTIATING", "Establishing direct connection");
-        void this.startWebRtc(msg.iceServers ?? []);
+        this.webRtcStarting = true;
+        void this.startWebRtc(msg.iceServers ?? [])
+          .catch((err) => {
+            console.error("[remcote] WebRTC startup failed", err);
+            if (!this.closed) this.reportConnectionFailure("Could not start the direct connection");
+          })
+          .finally(() => {
+            this.webRtcStarting = false;
+          });
       } else if (msg.state === "FAILED" || msg.state === "DISCONNECTED" || msg.state === "OFFLINE") {
         this.setState(msg.state, msg.message);
         this.teardownPeer();
@@ -126,15 +189,23 @@ export class RemoteSession {
     };
 
     pc.onicecandidate = (ev) => {
+      let payload: SignalPayload;
       if (ev.candidate) {
-        this.sendSignal({
+        payload = {
           kind: "candidate",
           candidate: ev.candidate.candidate,
           sdpMid: ev.candidate.sdpMid,
           sdpMLineIndex: ev.candidate.sdpMLineIndex,
-        });
+        };
       } else {
-        this.sendSignal({ kind: "candidate-end" });
+        payload = { kind: "candidate-end" };
+      }
+      // Browsers may emit ICE while setLocalDescription is still pending.
+      // The host must always receive the offer before any of its candidates.
+      if (!this.localOfferSent) {
+        this.pendingLocalCandidates.push(payload);
+      } else {
+        this.sendSignal(payload);
       }
     };
 
@@ -151,7 +222,7 @@ export class RemoteSession {
           break;
         case "failed":
           if (!this.iceRestarting) void this.tryIceRestart();
-          else this.setState("FAILED", "Direct connection failed");
+          else this.reportConnectionFailure("Direct connection failed");
           break;
         case "closed":
           if (!this.closed) this.setState("DISCONNECTED");
@@ -159,9 +230,23 @@ export class RemoteSession {
       }
     };
 
-    const offer = await pc.createOffer();
+    await this.createAndSendOffer();
+  }
+
+  private async createAndSendOffer(options?: RTCOfferOptions) {
+    const pc = this.pc;
+    if (!pc) throw new Error("Peer connection is unavailable");
+    this.localOfferSent = false;
+    this.pendingLocalCandidates = [];
+    const offer = await pc.createOffer(options);
     await pc.setLocalDescription(offer);
-    this.sendSignal({ kind: "offer", sdp: offer.sdp ?? "" });
+    this.sendSignal({
+      kind: "offer",
+      sdp: pc.localDescription?.sdp ?? offer.sdp ?? "",
+    });
+    this.localOfferSent = true;
+    const queued = this.pendingLocalCandidates.splice(0);
+    for (const candidate of queued) this.sendSignal(candidate);
   }
 
   /** Determine direct vs relay from the selected candidate pair. */
@@ -200,11 +285,9 @@ export class RemoteSession {
     this.remoteDescriptionSet = false;
     this.pendingCandidates = [];
     try {
-      const offer = await this.pc.createOffer({ iceRestart: true });
-      await this.pc.setLocalDescription(offer);
-      this.sendSignal({ kind: "offer", sdp: offer.sdp ?? "" });
+      await this.createAndSendOffer({ iceRestart: true });
     } catch {
-      this.setState("FAILED", "Reconnect failed");
+      this.reportConnectionFailure("Reconnect failed");
     }
   }
 
@@ -316,6 +399,10 @@ export class RemoteSession {
     this.pointerCh = null;
     this.reliableCh = null;
     this.pc = null;
+    this.remoteDescriptionSet = false;
+    this.pendingCandidates = [];
+    this.localOfferSent = false;
+    this.pendingLocalCandidates = [];
   }
 
   close(reason?: string) {

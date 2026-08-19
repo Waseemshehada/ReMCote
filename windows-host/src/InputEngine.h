@@ -17,7 +17,7 @@ struct InputEvent {
     float x = 0, y = 0;      // normalized 0..1
     int button = 0;          // 0 left, 1 middle, 2 right, 3 back, 4 forward
     bool down = false;
-    float dx = 0, dy = 0;    // wheel deltas (browser pixels)
+    float dx = 0, dy = 0;    // wheel deltas in viewer pixels
     uint32_t scanCode = 0;   // PS/2 set-1; >=0xE000 means extended
     std::string code;        // KeyboardEvent.code fallback when scanCode == 0
 };
