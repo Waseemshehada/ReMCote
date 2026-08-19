@@ -1,0 +1,869 @@
+هذا البرومت ابعته بعد ما ترجع لأقرب checkpoint قبل الـSafety Flag. صغته بحيث يكمل ReMCote الحقيقي، بس يثبت بوضوح إنه Attended Remote Desktop بموافقة صريحة وما يجرّ Replit على منطقة الـRAT مرة ثانية. يعني بنضل نبني الوحش، بس بدون شنب المافيا حالياً.
+
+Continue building the existing ReMCote project from its current state.
+
+Do NOT restart the project.
+
+Do NOT redesign the existing frontend or signaling architecture if they already work.
+
+Inspect the repository first and preserve all completed work.
+
+The current goal is a legitimate attended remote desktop MVP for testing high-performance streaming between two computers.
+
+This version must require clear, visible, explicit consent from the person physically using the Host computer before every remote-control session.
+
+⸻
+
+IMPORTANT PRODUCT SCOPE
+
+ReMCote MVP is an attended remote desktop application.
+
+The intended flow is:
+
+Host user manually launches ReMCoteHost.exe
+↓
+Host receives and visibly displays a Device ID
+↓
+Remote user enters that Device ID on the ReMCote website
+↓
+Host receives a large visible connection request
+↓
+Host user manually clicks ALLOW
+↓
+Only then does screen streaming and input control begin
+↓
+Closing ReMCoteHost.exe or pressing Disconnect immediately terminates access
+
+This MVP must NOT implement:
+
+* unattended access
+* hidden background access
+* stealth operation
+* automatic persistence
+* Windows Service installation
+* startup persistence
+* Windows login-screen control
+* UAC bypass
+* privilege escalation
+* remote installation
+* automatic execution without the Host user’s knowledge
+* hidden screen capture
+* hidden input injection
+* credential collection
+* password collection
+* bypassing Host approval
+
+These features are outside the MVP.
+
+⸻
+
+PRIMARY GOAL
+
+The only major technical question we need to prove right now is:
+
+Can ReMCote deliver an exceptionally responsive, high-quality interactive desktop stream between two explicitly consenting computers?
+
+Focus almost entirely on:
+
+Windows Screen Capture
+→
+GPU Hardware Encoding
+→
+WebRTC P2P
+→
+Browser Playback
+Browser Input
+→
+WebRTC DataChannel
+→
+Windows Input
+
+Everything else is secondary.
+
+⸻
+
+EXISTING PROJECT
+
+Before editing anything:
+
+1. inspect the entire current repository;
+2. determine what is already complete;
+3. identify partially written or truncated native Windows files;
+4. preserve completed frontend, backend, signaling, protocol, and UI work;
+5. continue from the current implementation instead of recreating components.
+
+I believe the frontend and signaling core may already exist.
+
+Verify this from the repository rather than assuming.
+
+⸻
+
+CURRENT NATIVE ISSUE
+
+Previous work on the Windows Host may have left:
+
+CaptureEngine.h
+CaptureEngine.cpp
+
+or related native files incomplete or truncated.
+
+Inspect these files carefully.
+
+If any source file is truncated or malformed:
+
+rewrite that specific file cleanly and completely.
+
+Do NOT replace the native capture architecture with browser screen sharing or screenshot polling.
+
+Keep individual native source files reasonably sized.
+
+If necessary, break large implementations into smaller focused files.
+
+For example:
+
+CaptureEngine.cpp
+DxgiCapture.cpp
+DxgiCapture.h
+GpuFrame.cpp
+GpuFrame.h
+
+Prefer clean modular code instead of one enormous generated file.
+
+⸻
+
+WINDOWS HOST
+
+Continue implementing:
+
+ReMCoteHost.exe
+
+Target:
+
+* Windows 10/11 x64
+* visible desktop application
+* C++20
+* CMake
+* MSVC
+* Windows SDK
+* Direct3D 11
+
+The application should remain visibly open while remote access is enabled.
+
+Main Host UI:
+
+ReMCote
+THIS DEVICE
+583 491 276
+● ONLINE
+Ready for connection
+GPU
+NVIDIA GeForce RTX 4060
+Encoder
+NVENC Ready
+[ Disconnect / Exit ]
+
+When a connection arrives:
+
+Incoming ReMCote Connection
+Another computer is requesting access.
+Screen sharing and remote keyboard/mouse control
+will begin only if you approve this session.
+[ DECLINE ]
+[ ALLOW ]
+
+No connection may become interactive before ALLOW is clicked.
+
+⸻
+
+SCREEN CAPTURE
+
+Use the Windows:
+
+DXGI Desktop Duplication API
+
+with:
+
+* Direct3D 11
+* IDXGIOutputDuplication
+* AcquireNextFrame
+* GPU textures
+
+Capture the primary display for this MVP.
+
+Preferred pipeline:
+
+Windows Desktop
+↓
+DXGI Desktop Duplication
+↓
+D3D11 GPU Texture
+↓
+GPU-compatible color conversion if needed
+↓
+NVENC
+↓
+WebRTC
+
+Avoid transferring full frames through CPU RAM unless technically required.
+
+Do not use periodic screenshots.
+
+Do not encode PNG/JPEG frames.
+
+Do not send screen images through HTTP.
+
+Do not send video frames through the ReMCote Node server.
+
+⸻
+
+FRAME FRESHNESS
+
+The architecture must strongly prioritize low latency.
+
+Never create a growing video queue.
+
+Use a bounded frame queue.
+
+Desired behavior:
+
+maximum pending frames ≈ 1
+
+If the pipeline falls behind:
+
+drop stale frames.
+
+Always prefer:
+
+newest frame
+
+over:
+
+old but perfect frame
+
+This is an interactive desktop, not offline video encoding.
+
+⸻
+
+HARDWARE ENCODING
+
+Primary target:
+
+NVIDIA RTX hardware.
+
+Use:
+
+NVENC H.264
+
+for the first working version because browser compatibility is the priority.
+
+Use NVIDIA low-latency settings suitable for interactive streaming.
+
+Optimize for minimum buffering.
+
+Avoid:
+
+* B-frames
+* lookahead
+* large internal queues
+* offline-quality presets
+* settings requiring future frames
+
+Prefer fast real-time output.
+
+Create a clean encoder abstraction so later versions may support:
+
+H.264
+HEVC
+AV1
+
+but do NOT delay this MVP implementing every codec.
+
+⸻
+
+WEBRTC
+
+Use real WebRTC.
+
+The Windows Host must become a real WebRTC peer.
+
+The browser must use:
+
+RTCPeerConnection
+
+Use the existing ReMCote server only for signaling:
+
+* host registration
+* Device ID lookup
+* connection request
+* SDP offer
+* SDP answer
+* ICE candidates
+* short-lived session state
+
+Desktop video must travel directly between peers whenever ICE can establish a direct route.
+
+Architecture:
+
+                 ReMCote Server
+                    Signaling
+                       │
+                  ↙         ↘
+Windows Host  ←──── WebRTC ────→ Browser Client
+                    P2P
+
+Configure STUN through environment variables.
+
+TURN may be supported as an optional explicit fallback configuration, but do not build a custom media relay inside the ReMCote API server.
+
+⸻
+
+INPUT CONTROL
+
+Remote input must only work during an approved active session.
+
+Create separate WebRTC DataChannels.
+
+Pointer movement
+
+Channel:
+
+input-pointer
+
+Prioritize freshness.
+
+Use approximately:
+
+ordered: false
+maxRetransmits: 0
+
+for mouse-move events.
+
+Do not retransmit obsolete pointer movement.
+
+⸻
+
+Reliable input
+
+Channel:
+
+input-reliable
+
+Use reliable ordered delivery for:
+
+* mouse button down/up
+* keyboard down/up
+* wheel events
+* control commands
+
+⸻
+
+WINDOWS INPUT
+
+Use the normal Windows SendInput API for the approved active session.
+
+Support:
+
+* mouse movement
+* left click
+* right click
+* middle click
+* wheel
+* keyboard
+* modifier keys
+* physical-key-friendly scan-code handling where appropriate
+
+Input must be rejected immediately when:
+
+* no approved session exists,
+* Host clicks Disconnect,
+* Host closes the program,
+* peer disconnects.
+
+⸻
+
+INPUT AND VIDEO MUST BE INDEPENDENT
+
+Do not process input on the capture/encoding thread.
+
+Suggested separation:
+
+Capture Thread
+Encoder Thread
+WebRTC/Network Thread
+Input Thread
+UI Thread
+Telemetry Thread
+
+Mouse/keyboard processing must never wait for a video encode operation.
+
+⸻
+
+CLIENT-SIDE CURSOR
+
+Implement a local browser cursor overlay if practical.
+
+When the user moves the remote pointer:
+
+1. update the displayed pointer locally;
+2. send the actual movement to the Host;
+3. Host applies it using SendInput.
+
+This is only a perceived-latency optimization.
+
+Do not fake actual remote state.
+
+⸻
+
+INITIAL PERFORMANCE TARGET
+
+Do NOT waste time trying to implement 4K120 before the base pipeline works.
+
+First target:
+
+1920×1080
+60 FPS
+NVENC H.264
+WebRTC P2P
+responsive input
+
+Once that works correctly:
+
+test:
+
+2560×1440
+60 FPS
+
+The code must not contain architectural limitations that prevent higher resolutions or refresh rates later.
+
+But first prove the actual transport.
+
+⸻
+
+AUTO STREAM SETTINGS
+
+For MVP, create a simple AUTO profile.
+
+Consider:
+
+* Host resolution
+* browser viewport
+* WebRTC RTT
+* packet loss
+* available bitrate
+* frames dropped
+
+Adapt bitrate gradually.
+
+Avoid constant bitrate oscillation.
+
+Example starting ranges:
+
+1080p60
+10–50 Mbps
+1440p60
+20–80 Mbps
+
+Treat these as tuning starting points, not hard promises.
+
+⸻
+
+PERFORMANCE HUD
+
+This is mandatory because ReMCote is currently an engineering experiment.
+
+Inside the remote desktop page show a small toggleable HUD.
+
+Example:
+
+ReMCote Performance
+Resolution     1920×1080
+FPS            60
+Codec          H.264
+Encoder        NVENC
+Bitrate        31.4 Mbps
+RTT            24 ms
+Jitter         2 ms
+Packet Loss    0.1%
+Frames Received  8311
+Frames Dropped   4
+Connection
+DIRECT
+
+Every statistic must come from real measurements.
+
+Do not generate placeholder FPS or latency values.
+
+Use WebRTC statistics APIs where possible.
+
+⸻
+
+INPUT LATENCY TEST
+
+Add a simple diagnostic.
+
+Browser sends:
+
+input-ping
+timestamp
+
+Host immediately replies:
+
+input-pong
+timestamp
+
+Display:
+
+Input RTT: 22 ms
+
+Use monotonic/high-resolution timing.
+
+This is not claimed to be complete glass-to-glass latency.
+
+It is only a measurable component of interaction latency.
+
+⸻
+
+HOST PERFORMANCE METRICS
+
+Measure where practical:
+
+Capture time
+Encode time
+Capture FPS
+Encoded FPS
+Dropped capture frames
+Dropped encoder frames
+
+Display these either in the Host debug panel or send basic telemetry to the connected Client.
+
+Example:
+
+Capture      1.2 ms
+Encode       3.4 ms
+Capture FPS  60
+Encode FPS   60
+
+Never fake these numbers.
+
+⸻
+
+CONNECTION STATUS
+
+Implement explicit states:
+
+OFFLINE
+ONLINE
+REQUESTED
+AWAITING_HOST_APPROVAL
+NEGOTIATING
+CONNECTED_DIRECT
+CONNECTED_RELAY
+DISCONNECTED
+FAILED
+
+The browser must never display a fake connected state.
+
+⸻
+
+DISCONNECT SAFETY
+
+Always provide a clearly visible Host button:
+
+STOP REMOTE SESSION
+
+It must immediately:
+
+1. disable remote input;
+2. close WebRTC PeerConnection;
+3. invalidate session state;
+4. return Host to Ready state.
+
+Closing ReMCoteHost.exe must have the same effect.
+
+⸻
+
+DO NOT OVERBUILD
+
+For this MVP DO NOT implement:
+
+* user accounts
+* billing
+* organizations
+* team administration
+* clipboard
+* file transfer
+* remote reboot
+* unattended sessions
+* startup integration
+* service installation
+* multi-monitor
+* recording
+* microphone
+* USB forwarding
+* Wacom
+* chat
+* mobile app
+* advanced admin dashboard
+
+We will add features only after the core stream proves itself.
+
+⸻
+
+AUDIO
+
+Audio is optional for this milestone.
+
+If system audio can be implemented cleanly without delaying the video/input proof, use:
+
+WASAPI loopback capture
+
+and send audio through WebRTC.
+
+Otherwise keep a clean AudioCaptureEngine interface and leave actual audio disabled for now.
+
+Video and input are more important.
+
+⸻
+
+BUILD SYSTEM
+
+Keep the Windows build reproducible.
+
+Use:
+
+CMake
+MSVC
+Windows SDK
+
+Provide:
+
+build-windows.ps1
+
+The intended final build command should be as simple as practical.
+
+Example:
+
+.\build-windows.ps1
+
+Output:
+
+dist\ReMCoteHost.exe
+
+Document required Windows/NVIDIA/WebRTC dependencies.
+
+If the Replit Linux environment cannot compile the Windows executable:
+
+that is acceptable.
+
+Do NOT replace native code with a fake cross-platform implementation.
+
+Instead produce correct native Windows source and an automated Windows build workflow.
+
+⸻
+
+IMPORTANT DEVELOPMENT RULE
+
+Do not mark ReMCote complete merely because:
+
+* frontend loads,
+* Device IDs display,
+* UI looks good,
+* mock stats work,
+* browser-to-browser WebRTC works.
+
+The core success path requires the actual Windows Host.
+
+The meaningful milestone is:
+
+Real Windows desktop
+↓
+Real capture
+↓
+Real hardware encoding
+↓
+Real WebRTC video
+↓
+Real browser
+
+and:
+
+Real browser input
+↓
+Real WebRTC DataChannel
+↓
+Real approved Windows input
+
+⸻
+
+IMPLEMENTATION ORDER
+
+Continue from the repository’s current state.
+
+Then work in this order:
+
+1
+
+Repair any truncated/incomplete native source files.
+
+Compile-check native code as far as the available environment permits.
+
+2
+
+Complete Host registration and Device ID presence.
+
+3
+
+Complete real DXGI screen capture.
+
+4
+
+Complete NVENC hardware encoding.
+
+5
+
+Connect encoded video to native WebRTC.
+
+6
+
+Verify browser receives the real desktop stream.
+
+7
+
+Implement approved-session mouse control.
+
+8
+
+Implement approved-session keyboard control.
+
+9
+
+Implement actual performance measurements.
+
+10
+
+Profile and remove unnecessary:
+
+* frame copies
+* buffering
+* locks
+* waits
+* queues
+
+⸻
+
+CODE QUALITY
+
+Do not create giant source files that are likely to become truncated.
+
+Prefer focused modules.
+
+Example:
+
+/windows-host/src/
+main.cpp
+ui/
+HostWindow.cpp
+HostWindow.h
+capture/
+CaptureEngine.cpp
+CaptureEngine.h
+DxgiDuplicator.cpp
+DxgiDuplicator.h
+video/
+EncoderEngine.cpp
+EncoderEngine.h
+NvencEncoder.cpp
+NvencEncoder.h
+rtc/
+WebRtcTransport.cpp
+WebRtcTransport.h
+SignalingClient.cpp
+SignalingClient.h
+input/
+InputEngine.cpp
+InputEngine.h
+telemetry/
+PerformanceMonitor.cpp
+PerformanceMonitor.h
+
+Keep interfaces small and clear.
+
+⸻
+
+FINAL MVP TEST
+
+The project is successful when:
+
+PC A
+
+Run:
+
+ReMCoteHost.exe
+
+It shows:
+
+Device ID
+Online
+NVENC Ready
+
+PC B
+
+Open the ReMCote website.
+
+Enter the Device ID.
+
+PC A
+
+A visible request appears.
+
+User physically clicks:
+
+ALLOW
+
+PC B
+
+The real PC A desktop appears.
+
+Then successfully test:
+
+* mouse movement
+* left/right click
+* typing
+* scrolling
+* dragging windows
+* fullscreen
+* playing 60 FPS content
+* opening Adobe Premiere if available
+* timeline scrubbing
+* Space
+* J/K/L
+
+Performance HUD must display real statistics.
+
+⸻
+
+DEFINITION OF DONE
+
+Do not define success by code quantity.
+
+The definition of done for this phase is:
+
+A visible, user-approved ReMCote session can stream the real Windows desktop from one computer to another with hardware acceleration, P2P WebRTC, responsive mouse/keyboard input, and measurable performance.
+
+Keep it attended.
+
+Keep consent explicit.
+
+Keep the Host visible.
+
+Keep media P2P.
+
+Keep frames fresh.
+
+Keep input independent.
+
+Use the GPU.
+
+Measure everything.
+
+Continue building ReMCote now.

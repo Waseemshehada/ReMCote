@@ -1,0 +1,1520 @@
+ReMCote — Build a Real Ultra-Low-Latency Remote Desktop MVP
+
+You are building a real working product called ReMCote.
+
+ReMCote is a high-performance remote desktop platform inspired by the simplicity of Chrome Remote Desktop, but engineered from the beginning for extremely responsive professional video-editing workflows.
+
+This is NOT a UI mockup.
+
+This is NOT a simulated remote desktop.
+
+This is NOT screenshot polling.
+
+This is NOT a VNC wrapper.
+
+This is NOT a normal web screen-sharing application.
+
+The goal of this first version is very specific:
+
+Install a lightweight Windows Host application on Computer A, open the ReMCote website on Computer B, enter the Device ID, connect, and obtain a real interactive live desktop stream with extremely low latency, smooth mouse/keyboard input, high frame rate, and high image quality.
+
+The first version must prioritize proving the streaming architecture.
+
+Do not overbuild account systems, billing, organization management, file transfer, chat, recording, admin panels, or other unrelated features.
+
+Build the smallest architecture capable of proving that ReMCote can feel exceptionally responsive.
+
+⸻
+
+1. NON-NEGOTIABLE ENGINEERING PRINCIPLE
+
+The ReMCote server must NEVER relay normal video frames during a direct connection.
+
+Architecture:
+
+                    ReMCote Cloud
+               Signaling / Device Registry
+                         │
+                   WebSocket/WSS
+                    ↙         ↘
+                   ↙           ↘
+       Windows Host  ←──────────────→ Browser Client
+      ReMCoteHost.exe     WebRTC P2P
+                         Video
+                         Input
+                         Audio later
+
+The Replit server is the control plane.
+
+The Windows Host and Browser Client are the media/data plane.
+
+Video must travel peer-to-peer whenever networking permits it.
+
+⸻
+
+2. PRODUCT NAME
+
+Product name:
+
+ReMCote
+
+Use this spelling everywhere.
+
+Not REMCote.
+Not RemoteMC.
+Not ReMote.
+
+Brand:
+
+ReMCote
+
+Tagline:
+
+Remote. Reimagined.
+
+⸻
+
+3. MVP USER FLOW
+
+Host computer
+
+User visits the ReMCote website.
+
+They see:
+
+ReMCote
+Remote. Reimagined.
+[ Download ReMCote Host for Windows ]
+
+User downloads:
+
+ReMCoteHost.exe
+
+User launches it.
+
+The Host application contacts the ReMCote signaling server and receives a random Device ID such as:
+
+583 491 276
+
+Host window displays:
+
+ReMCote Host
+This Device
+583 491 276
+● Online
+Ready for connection
+
+⸻
+
+Client computer
+
+User opens the ReMCote website.
+
+Home screen:
+
+ReMCote
+Connect to another computer
+┌─────────────────────────────┐
+│ Enter Device ID             │
+└─────────────────────────────┘
+        CONNECT
+
+User enters:
+
+583491276
+
+and presses CONNECT.
+
+The Host receives:
+
+Incoming ReMCote connection
+Allow this computer to connect?
+[ Decline ] [ Allow ]
+
+After clicking Allow:
+
+the remote Windows desktop immediately appears in the browser.
+
+Mouse works.
+
+Keyboard works.
+
+Fullscreen works.
+
+The connection status appears in a small unobtrusive performance HUD.
+
+⸻
+
+4. DO NOT FAKE THE STREAM
+
+Absolutely forbidden:
+
+* periodic screenshots
+* JPEG screenshot streaming
+* PNG screenshot streaming
+* HTTP polling
+* screen images over WebSocket
+* Canvas screenshot loops
+* streaming screen images through the Replit backend
+* fake demo video
+* prerecorded desktop
+* iframe tricks
+* RDP embedded in the webpage
+* VNC-over-WebSocket as the final streaming architecture
+* routing every frame through Node.js
+* software encoding if NVIDIA hardware encoding is available
+
+If a required native feature cannot be compiled inside Replit’s Linux environment, DO NOT silently replace it with a fake implementation.
+
+Instead:
+
+1. implement the real Windows source code,
+2. create the correct Windows build configuration,
+3. create an automated Windows build script/workflow,
+4. clearly document how to generate ReMCoteHost.exe.
+
+The architecture must remain real.
+
+⸻
+
+5. WEB APPLICATION STACK
+
+Build the ReMCote website using:
+
+* React
+* TypeScript
+* Vite
+* modern responsive CSS
+* WebRTC APIs
+* WebSocket signaling
+
+Backend:
+
+* Node.js
+* TypeScript
+* Fastify or another lightweight high-performance HTTP framework
+* WebSocket signaling server
+* persistent device registry
+* short-lived session tokens
+
+Use the Replit database/PostgreSQL where persistent data is required.
+
+Keep the database model extremely small.
+
+Suggested tables:
+
+devices
+-------
+id
+public_device_id
+secret_token_hash
+name
+online
+last_seen
+created_at
+sessions
+--------
+id
+host_device_id
+session_token
+state
+created_at
+expires_at
+
+Do not build user accounts yet.
+
+This is an MVP.
+
+⸻
+
+6. REPLIT DEPLOYMENT
+
+The ReMCote backend needs persistent WebSocket connectivity.
+
+Design it for an always-running Replit deployment.
+
+The server is responsible only for:
+
+* device presence
+* Device ID registration
+* connection requests
+* WebRTC offer/answer exchange
+* ICE candidate exchange
+* authorization/session state
+* basic telemetry
+
+The Replit server MUST NOT process, transcode, inspect, buffer, or relay the desktop video.
+
+⸻
+
+7. WINDOWS HOST ARCHITECTURE
+
+Create a native Windows x64 project:
+
+/apps/windows-host
+
+Preferred implementation:
+
+Modern C++ / C++20
+
+because this part is performance-critical.
+
+The Windows Host must be architected as separate modules:
+
+CaptureEngine
+EncoderEngine
+WebRtcTransport
+InputEngine
+DeviceRegistration
+PerformanceMonitor
+HostUI
+
+Keep clean interfaces between them.
+
+Do not tightly couple screen capture to networking.
+
+⸻
+
+8. SCREEN CAPTURE PIPELINE
+
+Use the Windows:
+
+DXGI Desktop Duplication API
+
+with:
+
+* Direct3D 11
+* IDXGIOutputDuplication
+* AcquireNextFrame
+* GPU textures
+
+Capture the primary monitor only for MVP.
+
+Do NOT copy every frame to CPU memory.
+
+The preferred pipeline is:
+
+Windows Desktop
+      ↓
+DXGI Desktop Duplication
+      ↓
+D3D11 GPU Texture
+      ↓
+GPU Color Conversion if required
+      ↓
+NVENC
+      ↓
+WebRTC
+
+Design for zero-copy or minimum-copy GPU processing.
+
+Avoid:
+
+GPU
+↓
+RAM
+↓
+CPU conversion
+↓
+GPU
+
+unless absolutely unavoidable.
+
+Every unnecessary memory copy is considered a performance defect.
+
+⸻
+
+9. FRAME QUEUE PHILOSOPHY
+
+Remote desktop responsiveness matters more than displaying stale frames.
+
+Do NOT build a long frame queue.
+
+If encoding/networking cannot keep up:
+
+drop old frames instead of increasing latency.
+
+Maximum desired pending video queue:
+
+1 frame
+
+Conceptually:
+
+Newest frame wins.
+
+A remote desktop that displays every frame 300 ms late is worse than one that drops frames but remains current.
+
+Optimize for freshness.
+
+⸻
+
+10. NVIDIA HARDWARE ENCODING
+
+Primary target hardware:
+
+NVIDIA RTX GPUs.
+
+Use:
+
+NVIDIA NVENC
+
+when available.
+
+Design the encoder abstraction so AMD and Intel hardware encoders can be implemented later.
+
+For the MVP:
+
+Primary codec
+
+H.264 hardware encoding.
+
+Reason:
+
+maximum compatibility with browser WebRTC clients.
+
+But detect codec capabilities and architect codec negotiation so future versions can support:
+
+* AV1
+* HEVC
+* H.264
+
+without redesigning the application.
+
+⸻
+
+11. NVENC LOW-LATENCY CONFIGURATION
+
+The encoder must be optimized for interactive remote desktop use, NOT offline video quality.
+
+Use NVIDIA’s ultra-low-latency / low-latency tuning.
+
+Prioritize:
+
+* extremely short encode time
+* minimal buffering
+* immediate frame output
+
+Avoid settings that require future frames.
+
+For the low-latency profile:
+
+* no B-frames
+* disable lookahead
+* minimize internal buffering
+* low-latency/ultra-low-latency tuning
+* fast NVENC preset appropriate for interactive streaming
+* frequent recovery/keyframes without excessive bandwidth
+* adaptive bitrate
+* low-delay behavior
+
+Do not blindly maximize compression efficiency if it increases latency.
+
+Latency wins.
+
+⸻
+
+12. INITIAL STREAM TARGETS
+
+Implement profiles.
+
+ReMCote AUTO
+
+Default.
+
+Detect:
+
+* client viewport
+* host resolution
+* host GPU
+* available encoder
+* estimated network bandwidth
+* WebRTC RTT
+* packet loss
+
+Automatically select the highest sensible mode.
+
+⸻
+
+ULTRA RESPONSIVE
+
+Target:
+
+1920x1080
+60 FPS minimum target
+high refresh rates when supported
+aggressive low-latency encoding
+
+Prioritize response.
+
+⸻
+
+ULTRA QUALITY
+
+Target:
+
+2560x1440
+60 FPS
+high bitrate
+hardware encoding
+
+If networking allows it.
+
+⸻
+
+NATIVE
+
+Use host desktop resolution where practical.
+
+Do not artificially promise 4K120 before the basic pipeline is proven.
+
+However, architecture must not contain hard-coded assumptions preventing:
+
+* 1440p120
+* 4K60
+* 4K120
+
+in future versions.
+
+⸻
+
+13. WEBRTC
+
+Use real WebRTC PeerConnection.
+
+Signaling happens over ReMCote WebSocket.
+
+Media/data happens through WebRTC.
+
+Implement:
+
+* SDP offer
+* SDP answer
+* ICE candidate exchange
+* connection lifecycle
+* reconnect handling
+* STUN
+* optional TURN configuration
+
+STUN/TURN server URLs must come from environment configuration.
+
+Example concept:
+
+STUN_URL
+TURN_URL
+TURN_USERNAME
+TURN_PASSWORD
+
+Prefer direct P2P.
+
+TURN is fallback only.
+
+Do not route the media through the normal ReMCote Node backend.
+
+⸻
+
+14. WEBRTC VIDEO BEHAVIOR
+
+The Browser Client receives a real WebRTC video track.
+
+Render it fullscreen.
+
+Requirements:
+
+* preserve aspect ratio
+* optional fit/fill behavior
+* no unnecessary CSS filters
+* no animation affecting the video
+* no unnecessary DOM rerendering
+* no React state update per video frame
+
+Keep React outside the critical rendering path.
+
+The <video> rendering pipeline must remain as direct as possible.
+
+⸻
+
+15. MOUSE LATENCY: SPECIAL OPTIMIZATION
+
+Mouse response is one of ReMCote’s most important features.
+
+Create a dedicated WebRTC DataChannel:
+
+input-pointer
+
+Configure it for low latency.
+
+Pointer movement packets should prefer freshness over guaranteed retransmission.
+
+Use:
+
+ordered: false
+maxRetransmits: 0
+
+for high-frequency mouse movement.
+
+If an old mouse movement packet is lost, DO NOT retransmit it.
+
+The next movement is already more useful.
+
+Mouse buttons/wheel may use appropriate reliable behavior where required.
+
+⸻
+
+16. CLIENT-SIDE CURSOR
+
+Implement a local client-side cursor overlay.
+
+When the user moves the mouse inside the remote desktop:
+
+1. update the visible cursor position locally immediately,
+2. send the mouse movement to Host,
+3. Host injects the movement into Windows.
+
+Do not wait for the remote video frame before showing the cursor movement.
+
+This is designed to produce near-instant perceived pointer response.
+
+The remote system state remains authoritative.
+
+The cursor overlay is only a latency-perception optimization.
+
+⸻
+
+17. KEYBOARD CHANNEL
+
+Create another DataChannel:
+
+input-reliable
+
+Use reliable ordered delivery for:
+
+* key down
+* key up
+* mouse button down
+* mouse button up
+* critical control commands
+
+Represent keyboard events using physical scan-code-friendly data where possible.
+
+Support:
+
+* Ctrl
+* Alt
+* Shift
+* Windows key
+* function keys
+* arrows
+* Delete
+* Backspace
+* Space
+* Enter
+
+Critical Premiere shortcuts must work.
+
+Examples:
+
+Ctrl+C
+Ctrl+V
+Ctrl+Z
+Ctrl+Shift+Z
+Alt
+Shift
+Space
+J
+K
+L
+I
+O
+
+⸻
+
+18. WINDOWS INPUT INJECTION
+
+On the Host use native Windows:
+
+SendInput
+
+for mouse and keyboard injection.
+
+Create an InputEngine.
+
+Convert normalized browser pointer coordinates into the correct Host desktop coordinates.
+
+Support:
+
+* absolute mouse positioning
+* relative motion where useful
+* left click
+* right click
+* middle click
+* double click
+* mouse wheel
+* horizontal wheel
+* keyboard scan codes
+* modifier keys
+
+Input processing must never wait for video encoding.
+
+Input and video are independent real-time pipelines.
+
+⸻
+
+19. INPUT PRIORITY
+
+This is extremely important.
+
+If the Host is busy encoding video:
+
+input must still execute immediately.
+
+Use independent threads/task queues.
+
+Conceptual priority:
+
+1. Input
+2. Capture freshness
+3. Video transmission
+4. Telemetry
+5. UI/logging
+
+Never block mouse handling behind a video frame operation.
+
+⸻
+
+20. CURSOR CAPTURE
+
+Prefer separating cursor information from the video when practical.
+
+The Host may transmit:
+
+cursorX
+cursorY
+cursorVisible
+cursorShape
+
+independently from the video.
+
+For MVP, cursor shape support may start simple.
+
+Do not delay the entire project because of advanced cursor shape handling.
+
+⸻
+
+21. AUDIO
+
+Audio is secondary to proving visual/control latency.
+
+Design an AudioCaptureEngine interface now.
+
+Future implementation:
+
+Windows WASAPI loopback capture.
+
+If adding basic audio does not destabilize the MVP, implement system audio over WebRTC.
+
+Otherwise:
+
+leave the clean interface in place and prioritize the video/input proof.
+
+Do not sacrifice streaming reliability just to check an audio checkbox.
+
+⸻
+
+22. PERFORMANCE HUD
+
+This is mandatory.
+
+While connected, show a small toggleable HUD in the top-right corner.
+
+Example:
+
+ReMCote
+2560×1440
+60 FPS
+Codec      H.264 NVENC
+Bitrate    47.8 Mbps
+RTT        23 ms
+Packet Loss 0.1%
+Decode     3.1 ms
+Frames Dropped 2
+Connection DIRECT
+
+Use actual measurements.
+
+Never fake performance numbers.
+
+Collect WebRTC statistics using real WebRTC stats APIs.
+
+At minimum expose:
+
+* current resolution
+* received FPS
+* bitrate
+* RTT
+* jitter
+* packet loss
+* frames received
+* frames decoded
+* frames dropped
+* codec
+* connection type
+* ICE candidate type
+* direct vs relay
+
+This HUD is essential because this MVP exists to measure whether the architecture is worth developing further.
+
+⸻
+
+23. LATENCY MEASUREMENT
+
+Create a simple built-in latency diagnostic.
+
+Do not claim exact glass-to-glass latency unless it is actually measured.
+
+But measure separate components where possible:
+
+network RTT
+capture interval
+encode duration
+decode statistics
+frame rendering timestamps
+input RTT
+
+Create an Input Ping test.
+
+Client sends:
+
+PING timestamp
+
+Host immediately returns:
+
+PONG timestamp
+
+Display:
+
+Input RTT: 21 ms
+
+Use monotonic/high-resolution clocks when available.
+
+⸻
+
+24. ADAPTIVE BITRATE
+
+Implement a basic adaptive bitrate controller.
+
+Do not aggressively oscillate.
+
+Monitor:
+
+* RTT
+* available outgoing bitrate
+* packet loss
+* frame drops
+
+Initial bitrate ranges:
+
+1080p:
+
+10–50 Mbps
+
+1440p:
+
+20–80 Mbps
+
+These are starting configuration ranges, not guaranteed optimal values.
+
+Allow the user to override bitrate manually from the HUD.
+
+Controls:
+
+AUTO
+10
+20
+30
+50
+80 Mbps
+
+⸻
+
+25. QUALITY UNDER MOTION
+
+Remote editing contains two very different situations:
+
+Motion
+
+Timeline scrubbing.
+Window dragging.
+Playback.
+Scrolling.
+
+Goal:
+
+freshness and responsiveness.
+
+Static
+
+User stops moving.
+Reads text.
+Looks at Premiere UI.
+Color checks a frame.
+
+Goal:
+
+maximum visual clarity.
+
+Design the architecture for future motion-adaptive quality.
+
+For the MVP, implement a simple version if practical:
+
+When desktop motion is high:
+
+favor encoding speed.
+
+When desktop becomes mostly static:
+
+allow quality to increase.
+
+But never create a large frame buffer.
+
+⸻
+
+26. DO NOT OVERENGINEER AUTHENTICATION
+
+For MVP:
+
+Host receives a random Device ID.
+
+Client enters Device ID.
+
+Host manually clicks Allow.
+
+The signaling server produces a short-lived session token.
+
+Device IDs are NOT authentication secrets.
+
+Never allow unattended access based only on knowing a 9-digit Device ID.
+
+Advanced account authentication comes later.
+
+⸻
+
+27. DEVICE IDs
+
+Generate cryptographically random IDs.
+
+Display as:
+
+583 491 276
+
+Internally normalize:
+
+583491276
+
+Device ID lookup must be efficient.
+
+Never sequentially assign predictable IDs.
+
+⸻
+
+28. HOST UI
+
+Host UI must be tiny and premium.
+
+Think:
+
+Chrome Remote Desktop simplicity
++
+Linear design cleanliness
++
+professional workstation software.
+
+Do not create a giant settings application.
+
+Main screen only:
+
+ReMCote
+THIS DEVICE
+583 491 276
+● ONLINE
+Ready for connection
+--------------------------------
+Stream Engine
+NVIDIA RTX 4060
+NVENC Ready
+[ Settings ]
+
+Incoming request modal:
+
+Incoming Connection
+A computer wants to connect.
+[ DECLINE ] [ ALLOW ]
+
+⸻
+
+29. WEBSITE VISUAL DESIGN
+
+ReMCote must look like a serious premium product.
+
+Design:
+
+* very dark background
+* subtle depth
+* minimal gradients
+* extremely clean spacing
+* large typography
+* restrained glass effects
+* no gaming RGB styling
+* no cheap neon cyberpunk look
+* no excessive animations
+* responsive desktop-first experience
+
+Color inspiration:
+
+background: nearly black
+cards: charcoal
+text: soft white
+primary accent: electric blue / cool violet
+success: restrained green
+
+Use tasteful micro-interactions.
+
+The remote desktop view itself must remain visually distraction-free.
+
+⸻
+
+30. CONNECTING SCREEN
+
+After CONNECT:
+
+show:
+
+Connecting to 583 491 276...
+Finding device
+✓ Device online
+Securing session
+✓ Ready
+Establishing direct connection
+...
+Optimizing stream
+...
+
+Once ICE connects:
+
+immediately transition to desktop.
+
+Do not introduce artificial animation delays.
+
+⸻
+
+31. CONNECTION STATES
+
+Handle clearly:
+
+OFFLINE
+CONNECTING
+AWAITING_APPROVAL
+NEGOTIATING
+CONNECTED_DIRECT
+CONNECTED_RELAY
+FAILED
+DISCONNECTED
+
+No mysterious infinite spinner.
+
+Every failure must produce a useful message.
+
+⸻
+
+32. RECONNECT
+
+If signaling briefly disconnects after WebRTC is already established:
+
+do not immediately kill the P2P media session.
+
+If WebRTC itself disconnects:
+
+attempt ICE restart/reconnect.
+
+Keep reconnect behavior simple but robust.
+
+⸻
+
+33. THREADING ON WINDOWS HOST
+
+Keep performance-sensitive operations independent.
+
+Suggested conceptual threads:
+
+Capture Thread
+Encoder Thread
+WebRTC/Network Thread
+Input Thread
+UI Thread
+Telemetry Thread
+
+Avoid locks on the hot path where possible.
+
+Prefer bounded lock-free or low-contention queues where appropriate.
+
+Again:
+
+do not permit frame backlog.
+
+⸻
+
+34. PERFORMANCE RULES
+
+Treat these as engineering commandments:
+
+1. Never buffer frames unnecessarily.
+2. Never block input behind video.
+3. Never copy GPU frames to CPU unless required.
+4. Never use software encode when supported NVENC is available.
+5. Never relay video through ReMCote cloud when direct P2P is available.
+6. Never retransmit obsolete mouse movement.
+7. Never prefer perfect stale video over fresh imperfect video.
+8. Never run per-frame React renders.
+9. Never invent performance statistics.
+10. Always instrument the pipeline.
+
+⸻
+
+35. MVP ACCEPTANCE TEST
+
+The MVP is considered successful only when this test works:
+
+Computer A
+
+Windows 11 PC.
+
+Run:
+
+ReMCoteHost.exe
+
+Host displays:
+
+Device ID
+Online
+NVENC Ready
+
+Computer B
+
+Open ReMCote website in Chrome/Edge.
+
+Enter Device ID.
+
+Host accepts.
+
+Browser receives live desktop.
+
+Then verify:
+
+* move mouse
+* click Start menu
+* open Explorer
+* type text
+* drag windows
+* scroll
+* play a 60fps YouTube/local video
+* open Adobe Premiere if installed
+* scrub timeline
+* press Space
+* use J/K/L
+* test fullscreen
+* inspect Performance HUD
+
+The objective is not feature count.
+
+The objective is:
+
+Does ReMCote feel dramatically responsive?
+
+⸻
+
+36. FIRST PERFORMANCE TARGET
+
+Do not claim impossible zero latency.
+
+Instead optimize the pipeline toward:
+
+On a good LAN
+
+* stable 1080p60
+* hardware NVENC
+* extremely responsive mouse
+* minimal frame queue
+* no visible multi-frame lag
+* smooth window dragging
+* smooth Premiere timeline interaction
+
+Over WAN
+
+Performance will depend on physical network RTT.
+
+The software must add as little avoidable latency as possible.
+
+⸻
+
+37. BUILD OUTPUT
+
+The repository should look approximately like:
+
+/remcote
+  /apps
+    /web
+      React client
+    /server
+      Node signaling server
+    /windows-host
+      Native Windows ReMCote Host
+  /packages
+    /shared
+      signaling protocol
+      message schemas
+      shared constants
+  /docs
+    architecture.md
+    protocol.md
+    performance.md
+    windows-build.md
+    testing.md
+  README.md
+
+⸻
+
+38. WINDOWS BUILD
+
+Create a reproducible Windows x64 build.
+
+Use:
+
+* CMake
+* MSVC
+* Windows SDK
+
+Document all native dependencies.
+
+If WebRTC/native libraries require special setup, automate as much as possible.
+
+Provide:
+
+build-windows.ps1
+
+Goal:
+
+.\build-windows.ps1
+
+produces something similar to:
+
+dist/ReMCoteHost.exe
+
+Do not require the user to manually edit Visual Studio project settings.
+
+⸻
+
+39. NATIVE WEBRTC
+
+Use a production-capable native WebRTC implementation.
+
+The Host must behave as a real WebRTC peer.
+
+It must interoperate directly with:
+
+new RTCPeerConnection()
+
+in Chrome/Edge.
+
+Do not invent a custom UDP protocol for this MVP.
+
+We need NAT traversal, congestion control, encryption, and browser interoperability quickly.
+
+WebRTC gives us the best starting architecture.
+
+A custom transport may be evaluated in a later ReMCote version only after the MVP is benchmarked.
+
+⸻
+
+40. ENCRYPTION
+
+Use WebRTC’s normal secure media/data transport.
+
+Do not implement custom cryptography.
+
+The signaling server must never receive Windows passwords.
+
+Do not log session secrets.
+
+Expire connection tokens quickly.
+
+⸻
+
+41. LOGGING
+
+Host log examples:
+
+[HOST] Registered as 583491276
+[GPU] NVIDIA RTX 4060 detected
+[NVENC] H264 hardware encoder initialized
+[CAPTURE] 2560x1440 @ 60
+[RTC] Incoming session
+[RTC] ICE direct connection established
+[RTC] RTT 22 ms
+[STREAM] 47.4 Mbps @ 60 fps
+
+Logs must help diagnose performance.
+
+Avoid logging high-frequency per-frame spam.
+
+⸻
+
+42. ERROR HANDLING
+
+Handle:
+
+* no NVIDIA GPU
+* NVENC unavailable
+* capture failure
+* display changed
+* ICE failure
+* host offline
+* permission rejected
+* signaling disconnected
+
+If NVENC is unavailable:
+
+show clearly:
+
+Hardware Encoder unavailable.
+
+Software fallback may exist for development, but it must be visibly labeled and must not pretend to represent ReMCote’s intended performance.
+
+⸻
+
+43. GPU DETECTION
+
+Display actual Host capabilities.
+
+Example:
+
+GPU
+NVIDIA GeForce RTX 4060
+Encoder
+NVENC
+Codec
+H.264
+Desktop
+2560×1440 @ 144 Hz
+
+Do not hardcode device information.
+
+⸻
+
+44. FUTURE-READY CODEC NEGOTIATION
+
+Architect codec capabilities as:
+
+HostCapabilities {
+  h264
+  hevc
+  av1
+  maxWidth
+  maxHeight
+  maxFps
+}
+
+MVP uses H.264 WebRTC.
+
+Later ReMCote will explore:
+
+AV1
+HEVC
+4:4:4
+10-bit
+HDR
+
+Do not implement all of these now.
+
+Just avoid architecture that prevents them.
+
+⸻
+
+45. FUTURE PERFORMANCE IDEAS
+
+Create /docs/future-performance.md.
+
+Document, but do NOT block MVP on:
+
+* AV1 NVENC
+* HEVC
+* native ReMCote Client
+* WebCodecs
+* custom low-latency rendering
+* 120/144 FPS
+* client GPU decoder
+* 4:4:4 modes
+* 10-bit
+* HDR
+* multi-monitor
+* gamepad
+* Wacom
+* USB forwarding
+* clipboard
+* file transfer
+* unattended access
+* Windows Service
+* secure desktop/login screen support
+* virtual display driver
+* local cursor prediction
+* region-of-interest encoding
+* content-adaptive bitrate
+* motion classification
+* frame pacing optimization
+* GPU zero-copy decode/render in native client
+
+The MVP must stay focused.
+
+⸻
+
+46. VERY IMPORTANT: BUILD, DO NOT ONLY PLAN
+
+Do not reply with an architecture explanation and stop.
+
+Start implementing.
+
+Build the web app.
+
+Build the signaling server.
+
+Build the shared protocol.
+
+Build the Windows Host source.
+
+Connect the pieces.
+
+Create build scripts.
+
+Create diagnostics.
+
+Run every test that can run inside Replit.
+
+Fix actual errors.
+
+Do not leave major components as pseudo-code.
+
+Do not create placeholder functions such as:
+
+// TODO: implement streaming
+
+for the central streaming path and then call the project complete.
+
+The central path is the product.
+
+⸻
+
+47. IMPLEMENTATION ORDER
+
+Work in this exact order:
+
+Milestone 1
+
+ReMCote website + signaling server.
+
+Verify two browser sessions can discover a Device ID and exchange WebRTC signaling messages.
+
+Milestone 2
+
+Windows Host registration.
+
+Host appears Online on website.
+
+Milestone 3
+
+Real desktop capture.
+
+Verify DXGI captures live desktop frames.
+
+Milestone 4
+
+Real hardware encoder.
+
+Verify NVENC is used.
+
+Measure encode time.
+
+Milestone 5
+
+WebRTC video.
+
+Windows Host sends real live video to browser.
+
+Milestone 6
+
+Mouse.
+
+Browser mouse controls Host.
+
+Milestone 7
+
+Keyboard.
+
+Keyboard controls Host.
+
+Milestone 8
+
+Performance HUD.
+
+Show real FPS/RTT/bitrate/loss/codec.
+
+Milestone 9
+
+Optimization pass.
+
+Profile the complete pipeline and remove unnecessary:
+
+* queues
+* copies
+* waits
+* locks
+* buffering
+
+Do not spend time polishing secondary UI before Milestone 8 works.
+
+⸻
+
+48. FINAL RESULT
+
+When finished, I should be able to:
+
+1. open ReMCote,
+2. download ReMCoteHost,
+3. run it on Windows PC A,
+4. receive a Device ID,
+5. open ReMCote website on PC B,
+6. enter that ID,
+7. approve connection on A,
+8. see PC A live inside Browser B,
+9. move mouse and keyboard,
+10. experience a smooth hardware-accelerated P2P remote desktop,
+11. see real connection/performance statistics.
+
+The final success criterion is not how much code was generated.
+
+The final success criterion is:
+
+A real interactive ReMCote connection between two computers.
+
+Optimize aggressively.
+
+Measure everything.
+
+Prefer the newest frame.
+
+Keep the video P2P.
+
+Keep input independent.
+
+Use the GPU.
+
+Minimize buffering.
+
+Build ReMCote.

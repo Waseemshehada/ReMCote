@@ -1,0 +1,148 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: ReMCote control-plane API (signaling itself runs over WebSocket at /api/ws)
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: devices
+    description: Device registry lookups
+  - name: config
+    description: Client runtime configuration
+  - name: stats
+    description: Control-plane telemetry
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /devices/{publicDeviceId}:
+    get:
+      operationId: getDeviceStatus
+      tags: [devices]
+      summary: Look up a device by its public Device ID
+      parameters:
+        - name: publicDeviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceStatus"
+        "404":
+          description: Unknown device
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorMessage"
+  /ice-config:
+    get:
+      operationId: getIceConfig
+      tags: [config]
+      summary: STUN/TURN server configuration for WebRTC peers
+      responses:
+        "200":
+          description: ICE server list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IceConfig"
+  /stats:
+    get:
+      operationId: getControlPlaneStats
+      tags: [stats]
+      summary: Control-plane statistics
+      responses:
+        "200":
+          description: Current registry statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlPlaneStats"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    ApiErrorMessage:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    DeviceStatus:
+      type: object
+      properties:
+        publicDeviceId:
+          type: string
+        name:
+          type: ["string", "null"]
+        online:
+          type: boolean
+        lastSeen:
+          type: ["string", "null"]
+      required:
+        - publicDeviceId
+        - online
+    IceServer:
+      type: object
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+        username:
+          type: ["string", "null"]
+        credential:
+          type: ["string", "null"]
+      required:
+        - urls
+    IceConfig:
+      type: object
+      properties:
+        iceServers:
+          type: array
+          items:
+            $ref: "#/components/schemas/IceServer"
+      required:
+        - iceServers
+    ControlPlaneStats:
+      type: object
+      properties:
+        devicesOnline:
+          type: number
+        devicesTotal:
+          type: number
+        activeSessions:
+          type: number
+        sessionsTotal:
+          type: number
+      required:
+        - devicesOnline
+        - devicesTotal
+        - activeSessions
+        - sessionsTotal

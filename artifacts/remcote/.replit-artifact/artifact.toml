@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "ReMCote"
+description = "ReMCote — an ultra-low-latency remote desktop platform. Website where a user enters a Device ID to connect to a Windows host machine and receives a live P2P WebRTC desktop stream with mouse/keyboard control and a performance HUD."
+version = "1.0.0"
+id = "artifacts/remcote"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23945
+
+[services.development]
+run = "pnpm --filter @workspace/remcote run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/remcote", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/remcote/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23945"
+BASE_PATH = "/"

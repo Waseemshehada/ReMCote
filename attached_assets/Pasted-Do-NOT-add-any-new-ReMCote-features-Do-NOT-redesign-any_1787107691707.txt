@@ -1,0 +1,255 @@
+Do NOT add any new ReMCote features.
+
+Do NOT redesign anything.
+
+The project has reached the point where I want to perform the FIRST REAL Windows-to-browser streaming test.
+
+Your only task now is to make the existing project completely test-ready for a real Windows 10/11 PC with an NVIDIA RTX GPU.
+
+1. Verify the Windows Host source is actually obtainable
+
+The Host Setup page currently shows:
+
+git clone https://github.com/replit/remcote.git
+
+Do NOT display this URL unless that repository actually exists and contains the current ReMCote source.
+
+Verify it.
+
+If the project is not actually available from that GitHub URL, fix the Host Setup page.
+
+Provide a real way for me to obtain the entire Windows Host source from the current project.
+
+Ideally provide:
+
+Download Windows Host Source
+
+as a ZIP containing:
+
+windows-host/
+packages/shared/ if required
+build scripts
+CMake files
+all required source files
+README / build instructions
+
+Do not leave a fictional repository URL in the UI.
+
+⸻
+
+2. Verify signaling URL configuration
+
+Inspect the entire Windows Host source.
+
+Make sure it does NOT depend on:
+
+localhost
+127.0.0.1
+a hardcoded temporary development URL
+
+for production testing.
+
+The Windows Host must be able to connect from another physical computer over the Internet to the current ReMCote signaling server.
+
+Create a clear configuration such as:
+
+REMCOTE_SIGNALING_URL
+
+or a small config file.
+
+The Host should clearly log:
+
+Connecting to:
+wss://REAL-REMCOTE-SERVER/api/ws
+
+Use the actual deployed/published ReMCote server URL when available.
+
+Do not hardcode a fake URL.
+
+⸻
+
+3. Prepare a stable server for testing
+
+The first real test will happen from an external Windows computer.
+
+Make sure the signaling server is reachable externally using HTTPS/WSS.
+
+If the current .replit.dev development URL is not appropriate for a stable external test, prepare the app for Replit deployment/publishing and clearly tell me exactly what must be published.
+
+Do not move video through the server.
+
+This remains signaling only.
+
+⸻
+
+4. Make Windows compilation as easy as possible
+
+Review:
+
+windows-host/build-windows.ps1
+
+The desired experience is:
+
+.\build-windows.ps1
+
+and then:
+
+ReMCoteHost.exe
+
+Verify that the script:
+
+* checks prerequisites
+* clearly reports missing prerequisites
+* downloads/configures dependencies where practical
+* creates the build directory
+* runs CMake
+* builds Release x64
+* tells me the exact EXE path
+
+Avoid requiring manual Visual Studio project editing.
+
+⸻
+
+5. Add a preflight check
+
+Before starting the Host, perform or provide a diagnostic showing:
+
+Windows version
+GPU name
+NVIDIA detected
+NVENC available
+D3D11 available
+DXGI Desktop Duplication available
+signaling server reachable
+WebSocket connection reachable
+
+Example:
+
+ReMCote Host Preflight
+Windows 11 x64             PASS
+NVIDIA RTX 4060            PASS
+NVENC H.264                PASS
+Direct3D 11                PASS
+DXGI Capture               PASS
+Signaling Server           PASS
+READY
+
+Use real checks where implemented.
+
+Never fake PASS values.
+
+⸻
+
+6. Host logging
+
+For the first test I need useful logs.
+
+Make sure the Host outputs concise information such as:
+
+[REMCOTE] Starting
+[GPU] NVIDIA GeForce RTX 4060
+[CAPTURE] DXGI initialized
+[NVENC] H.264 encoder initialized
+[SIGNALING] Connecting to wss://...
+[SIGNALING] Connected
+[DEVICE] Registered: 583 491 276
+
+When a client connects:
+
+[SESSION] Request received
+[SESSION] Host approved
+[WEBRTC] Creating answer
+[ICE] Candidate...
+[ICE] DIRECT connection established
+[VIDEO] First frame captured
+[VIDEO] First frame encoded
+[VIDEO] First frame sent
+
+These logs are critical for finding exactly where a failure occurs.
+
+⸻
+
+7. First-frame diagnostics
+
+Add simple diagnostics for the first real stream.
+
+I want to be able to determine independently whether these events happen:
+
+Capture initialized
+First desktop frame captured
+NVENC initialized
+First frame encoded
+WebRTC peer connected
+Video track active
+First encoded frame sent
+Input DataChannel opened
+
+Do not spam logs every frame.
+
+Log state transitions only.
+
+⸻
+
+8. Do NOT add features
+
+Do not implement:
+
+* audio
+* AV1
+* HEVC
+* 4K
+* 120 FPS
+* multi-monitor
+* clipboard
+* file transfer
+* accounts
+* unattended access
+* Windows Service
+* adaptive bitrate improvements
+* UI redesign
+
+Not now.
+
+The ONLY objective is:
+
+Make the existing ReMCote MVP easy to obtain, compile, run, diagnose, and test on a real Windows + NVIDIA computer.
+
+⸻
+
+9. Final response
+
+When finished, do not tell me the project is “end-to-end verified.”
+
+You cannot verify the real stream without my physical Windows/NVIDIA machine.
+
+Instead give me exactly:
+
+A. What I download
+
+Exact file/link/button.
+
+B. What I install first
+
+Exact Windows prerequisites.
+
+C. What command I run
+
+Exact PowerShell commands.
+
+D. Where the EXE appears
+
+Exact path.
+
+E. What I should see
+
+Expected Host startup output.
+
+F. How I perform the first connection
+
+Exact steps from PC A and PC B.
+
+G. What logs I should send you if it fails
+
+Exact log file/path or console output.
+
+Do this now and make no unrelated changes.

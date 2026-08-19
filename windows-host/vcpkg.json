@@ -1,0 +1,8 @@
+{
+  "name": "remcote-host",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "libdatachannel",
+    "nlohmann-json"
+  ]
+}

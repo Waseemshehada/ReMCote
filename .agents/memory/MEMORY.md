@@ -1,0 +1,1 @@
+- [ReMCote gotchas](remcote-gotchas.md) — zod v3 codegen `type:integer` breakage, WS proxy path allow-listing, generated hook queryKey requirement.
