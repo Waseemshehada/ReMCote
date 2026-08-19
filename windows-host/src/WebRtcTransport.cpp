@@ -167,7 +167,6 @@ bool WebRtcTransport::ConfigureVideoSender(
             // one now so the viewer can decode immediately.
             if (keyframeRequest_) keyframeRequest_();
         });
-        s->answerStarted = true;
     }
 
     Logger::Infof("Negotiated H.264 video track (payload type %d)", h264PayloadType);
@@ -286,6 +285,10 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
             s->pc->setRemoteDescription(offer);
             if (!ConfigureVideoSender(s, offer)) return;
             s->pc->setLocalDescription();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                s->answerStarted = true;
+            }
             Logger::Info("Generated local WebRTC answer");
         } catch (const std::exception& e) {
             Logger::Errorf("WebRTC answer generation failed: %s", e.what());
