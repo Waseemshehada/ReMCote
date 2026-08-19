@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>   // std::wcsstr
 #include <filesystem>
 #include <fstream>
 #include <memory>

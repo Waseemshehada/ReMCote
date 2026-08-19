@@ -109,6 +109,8 @@ target_compile_definitions(ReMCoteHost PRIVATE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
   WEBVIEW2_STATIC
+  _CRT_SECURE_NO_WARNINGS         # suppress C4996 deprecation on wcstombs etc.
+  _CRT_NONSTDC_NO_WARNINGS        # suppress C4996 on POSIX-named functions
 )
 
 set_target_properties(ReMCoteHost PROPERTIES

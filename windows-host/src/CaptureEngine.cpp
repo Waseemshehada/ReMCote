@@ -39,7 +39,7 @@ bool CaptureEngine::Initialize() {
     DXGI_ADAPTER_DESC adapterDesc{};
     adapter->GetDesc(&adapterDesc);
     char name[256]{};
-    wcstombs(name, adapterDesc.Description, sizeof(name) - 1);
+    wcstombs_s(nullptr, name, sizeof(name), adapterDesc.Description, sizeof(name) - 1);
     gpuName_ = name;
 
     // Primary monitor only for MVP (spec §8).

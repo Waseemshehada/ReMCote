@@ -152,7 +152,8 @@ void Logger::Logf(LogLevel level, const char* format, ...) {
     char buffer[4096];
     va_list args;
     va_start(args, format);
-    vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, format, args);
+    vsnprintf(buffer, sizeof(buffer) - 1, format, args);
+    buffer[sizeof(buffer) - 1] = '\0';
     va_end(args);
     Log(level, buffer);
 }
