@@ -6,6 +6,7 @@
 // injection, UI (this thread). Input never waits on video.
 
 #include <atomic>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>     // std::wcsstr
@@ -35,6 +36,21 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
 using namespace remcote;
+
+namespace {
+
+// The negotiated constrained-baseline profile-level-id is 42e02a (H.264
+// Level 4.2). Its 1080p macroblock rate supports up to 60 fps, and its
+// practical maximum bitrate is 50 Mbps. Keep a margin below that limit.
+constexpr int kH264Level42MaxFps = 60;
+constexpr int kH264Level42MaxBitrateKbps = 45000;
+
+int EncodeFpsForCapture(int captureHz) {
+    return std::min(captureHz > 0 ? captureHz : kH264Level42MaxFps,
+                    kH264Level42MaxFps);
+}
+
+} // namespace
 
 // ─── Signaling URL resolution ─────────────────────────────────────────────────
 //
@@ -230,9 +246,14 @@ struct HostApp {
         EncoderConfig cfg;
         cfg.width = capture.Width();
         cfg.height = capture.Height();
-        cfg.fps = capture.RefreshHz() > 0 ? capture.RefreshHz() : 60;
+        cfg.fps = EncodeFpsForCapture(capture.RefreshHz());
         cfg.bitrateKbps = 20000;
-        cfg.maxBitrateKbps = 80000;
+        cfg.maxBitrateKbps = kH264Level42MaxBitrateKbps;
+        if (capture.RefreshHz() > cfg.fps) {
+            Logger::Infof(
+                "H.264 Level 4.2 caps encoding at %d fps (desktop refresh: %d Hz)",
+                cfg.fps, capture.RefreshHz());
+        }
         if (!encoder.Initialize(capture.Device(), cfg)) {
             ui.SetStatusLine("Encoder init failed - is this an NVIDIA GPU?");
             Logger::Error("NVENC encoder initialization failed; remote session cannot start");
@@ -412,10 +433,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     EncoderConfig encoderProbe;
     encoderProbe.width = app->capture.Width();
     encoderProbe.height = app->capture.Height();
-    encoderProbe.fps =
-        app->capture.RefreshHz() > 0 ? app->capture.RefreshHz() : 60;
+    encoderProbe.fps = EncodeFpsForCapture(app->capture.RefreshHz());
     encoderProbe.bitrateKbps = 20000;
-    encoderProbe.maxBitrateKbps = 80000;
+    encoderProbe.maxBitrateKbps = kH264Level42MaxBitrateKbps;
+    if (app->capture.RefreshHz() > encoderProbe.fps) {
+        Logger::Infof(
+            "H.264 Level 4.2 host probe uses %d fps (desktop refresh: %d Hz)",
+            encoderProbe.fps, app->capture.RefreshHz());
+    }
     if (!app->encoder.Initialize(app->capture.Device(), encoderProbe)) {
         return runViewerOnly(
             L"This computer cannot host a ReMCote session because a compatible "

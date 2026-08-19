@@ -20,6 +20,24 @@ NV_ENCODE_API_FUNCTION_LIST* Api(void* p) {
 using PFN_NvEncodeAPICreateInstance =
     NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
 
+const char* StatusName(NVENCSTATUS status) {
+    switch (status) {
+    case NV_ENC_SUCCESS: return "NV_ENC_SUCCESS";
+    case NV_ENC_ERR_NO_ENCODE_DEVICE: return "NV_ENC_ERR_NO_ENCODE_DEVICE";
+    case NV_ENC_ERR_UNSUPPORTED_DEVICE: return "NV_ENC_ERR_UNSUPPORTED_DEVICE";
+    case NV_ENC_ERR_INVALID_ENCODERDEVICE: return "NV_ENC_ERR_INVALID_ENCODERDEVICE";
+    case NV_ENC_ERR_INVALID_DEVICE: return "NV_ENC_ERR_INVALID_DEVICE";
+    case NV_ENC_ERR_DEVICE_NOT_EXIST: return "NV_ENC_ERR_DEVICE_NOT_EXIST";
+    case NV_ENC_ERR_INVALID_PTR: return "NV_ENC_ERR_INVALID_PTR";
+    case NV_ENC_ERR_INVALID_EVENT: return "NV_ENC_ERR_INVALID_EVENT";
+    case NV_ENC_ERR_INVALID_PARAM: return "NV_ENC_ERR_INVALID_PARAM";
+    case NV_ENC_ERR_INVALID_CALL: return "NV_ENC_ERR_INVALID_CALL";
+    case NV_ENC_ERR_OUT_OF_MEMORY: return "NV_ENC_ERR_OUT_OF_MEMORY";
+    case NV_ENC_ERR_UNSUPPORTED_PARAM: return "NV_ENC_ERR_UNSUPPORTED_PARAM";
+    default: return "NV_ENC_ERR_UNKNOWN";
+    }
+}
+
 } // namespace
 
 bool EncoderEngine::Initialize(
@@ -54,8 +72,8 @@ bool EncoderEngine::Initialize(
     const NVENCSTATUS instanceStatus = createInstance(Api(api_));
     if (instanceStatus != NV_ENC_SUCCESS) {
         Logger::Errorf(
-            "NVENC API instance creation failed (status %d)",
-            instanceStatus);
+            "NVENC API instance creation failed (%s, status %d)",
+            StatusName(instanceStatus), instanceStatus);
         Shutdown();
         return false;
     }
@@ -69,8 +87,8 @@ bool EncoderEngine::Initialize(
         Api(api_)->nvEncOpenEncodeSessionEx(&open, &encoder_);
     if (openStatus != NV_ENC_SUCCESS) {
         Logger::Errorf(
-            "NVENC encoder session open failed (status %d)",
-            openStatus);
+            "NVENC encoder session open failed (%s, status %d)",
+            StatusName(openStatus), openStatus);
         Shutdown();
         return false;
     }
@@ -100,8 +118,8 @@ bool EncoderEngine::Initialize(
             &presetCfg);
     if (presetStatus != NV_ENC_SUCCESS) {
         Logger::Errorf(
-            "NVENC preset lookup failed (status %d)",
-            presetStatus);
+            "NVENC preset lookup failed (%s, status %d)",
+            StatusName(presetStatus), presetStatus);
         Shutdown();
         return false;
     }
@@ -130,8 +148,8 @@ bool EncoderEngine::Initialize(
         Api(api_)->nvEncInitializeEncoder(encoder_, &init);
     if (initializeStatus != NV_ENC_SUCCESS) {
         Logger::Errorf(
-            "NVENC encoder initialization failed (status %d)",
-            initializeStatus);
+            "NVENC encoder initialization failed (%s, status %d)",
+            StatusName(initializeStatus), initializeStatus);
         Shutdown();
         return false;
     }
@@ -276,6 +294,13 @@ bool EncoderEngine::SubmitFrame(
 void EncoderEngine::SetBitrate(int kbps) {
     std::lock_guard<std::mutex> operationLock(operationMutex_);
     if (!encoder_ || !api_) return;
+    if (kbps <= 0) return;
+    const int targetKbps = std::min(kbps, config_.maxBitrateKbps);
+    if (targetKbps != kbps) {
+        Logger::Infof(
+            "NVENC bitrate request capped at %d kbps for the negotiated H.264 level",
+            targetKbps);
+    }
 
     NV_ENC_RECONFIGURE_PARAMS re{};
     re.version = NV_ENC_RECONFIGURE_PARAMS_VER;
@@ -298,10 +323,10 @@ void EncoderEngine::SetBitrate(int kbps) {
     cfg.gopLength = NVENC_INFINITE_GOPLENGTH;
     cfg.frameIntervalP = 1;
     cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-    cfg.rcParams.averageBitRate = kbps * 1000;
-    cfg.rcParams.maxBitRate = kbps * 2000;
+    cfg.rcParams.averageBitRate = targetKbps * 1000;
+    cfg.rcParams.maxBitRate = config_.maxBitrateKbps * 1000;
     cfg.rcParams.vbvBufferSize =
-        kbps * 1000 / std::max(config_.fps, 1);
+        targetKbps * 1000 / std::max(config_.fps, 1);
     cfg.rcParams.vbvInitialDelay = cfg.rcParams.vbvBufferSize;
     cfg.encodeCodecConfig.h264Config.idrPeriod =
         NVENC_INFINITE_GOPLENGTH;
@@ -316,8 +341,8 @@ void EncoderEngine::SetBitrate(int kbps) {
             "NVENC bitrate reconfigure failed (status %d)", status);
         return;
     }
-    config_.bitrateKbps = kbps;
-    Logger::Infof("NVENC bitrate reconfigured to %d kbps", kbps);
+    config_.bitrateKbps = targetKbps;
+    Logger::Infof("NVENC bitrate reconfigured to %d kbps", targetKbps);
 }
 
 void EncoderEngine::Shutdown() {
