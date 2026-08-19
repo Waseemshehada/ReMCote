@@ -1,10 +1,4 @@
-# Builds the ReMCote Windows Host on GitHub-hosted windows-latest runners
-# using the same script a developer runs locally: windows-host/build-windows.ps1
-#
-# Result: a downloadable artifact "ReMCoteHost-Windows" containing
-# ReMCoteHost.exe plus the VC++ runtime DLLs it links against (x64-windows-static-md
-# links all third-party deps statically; only the MSVC CRT is dynamic).
-name: Build Windows Host
+name: Windows Build
 
 on:
   push:
@@ -12,79 +6,126 @@ on:
     paths:
       - "windows-host/**"
       - ".github/workflows/build-windows-host.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NV_HEADERS_TAG: n12.2.72.0
 
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 90
-    env:
-      # Persistent binary cache so vcpkg's libdatachannel/openssl builds are
-      # compiled once and restored on later runs.
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-bincache
+    name: Build ReMCote Host (Windows)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows-host
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore vcpkg binary cache
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan 2
+        run: |
+          pip install "conan>=2.4,<3"
+          conan --version
+
+      - name: Cache Conan packages
         uses: actions/cache@v4
         with:
-          path: |
-            vcpkg-bincache
-            windows-host/third_party/vcpkg
-            windows-host/third_party/nv-codec-headers
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('windows-host/vcpkg.json', 'windows-host/CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
+          path: ~/.conan2/p
+          key: conan2-windows2022-${{ hashFiles('windows-host/conanfile.txt') }}
+          restore-keys: conan2-windows2022-
 
-      - name: Create binary cache dir
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
-
-      # windows-latest ships VS 2022 (Desktop C++), CMake, and git — the same
-      # prerequisites build-windows.ps1 checks for. No manual installs needed.
-      - name: Build (windows-host/build-windows.ps1)
-        shell: pwsh
-        working-directory: windows-host
-        run: .\build-windows.ps1
-
-      - name: Stage artifact (exe + required runtime DLLs)
-        shell: pwsh
+      - name: Conan profile (MSVC 2022, x64, Release)
         run: |
-          $stage = "artifact-stage"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "windows-host\dist\ReMCoteHost.exe" $stage
+          conan profile detect --force
+          conan profile show
 
-          # Any DLLs vcpkg placed next to the exe (none expected with the
-          # static-md triplet, but never ship a broken artifact if that changes).
-          $binDir = "windows-host\build\bin\Release"
-          if (Test-Path $binDir) {
-            Get-ChildItem $binDir -Filter *.dll -ErrorAction SilentlyContinue |
-              Copy-Item -Destination $stage
-          }
-
-          # MSVC CRT redistributable DLLs (the only dynamic dependency of the
-          # static-md triplet besides OS-provided system DLLs).
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $crt = Get-ChildItem "$vsPath\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
-            Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $crt) { throw "MSVC CRT redist directory not found" }
-          Copy-Item "$($crt.FullName)\*.dll" $stage
-
-          # Ship the run instructions with the binary.
-          Copy-Item "windows-host\README.md" $stage
-          Get-ChildItem $stage
-
-      - name: Smoke-check staged binary exists
-        shell: pwsh
+      - name: Resolve prebuilt dependencies (Conan install)
         run: |
-          if (-not (Test-Path "artifact-stage\ReMCoteHost.exe")) { throw "ReMCoteHost.exe missing" }
+          conan install . `
+            --output-folder=conan `
+            --build=missing `
+            -s build_type=Release `
+            -s arch=x86_64 `
+            -s compiler.cppstd=17
+          if ($LASTEXITCODE -ne 0) { throw "conan install failed" }
 
-      - name: Upload artifact
+      - name: Print resolved package IDs
+        run: conan graph info . -s build_type=Release -s arch=x86_64 -s compiler.cppstd=17 --format=text 2>$null | Select-String -Pattern "ref:|package_id:|binary:" | Select-Object -First 60
+
+      - name: Fetch NVENC headers (pinned)
+        run: |
+          git clone --depth 1 --branch $env:NV_HEADERS_TAG https://github.com/FFmpeg/nv-codec-headers third_party/nv-codec-headers
+          if ($LASTEXITCODE -ne 0) { throw "nv-codec-headers clone failed" }
+
+      - name: CMake configure
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="conan/conan_toolchain.cmake" `
+            -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+
+      - name: Compile ReMCoteHost
+        run: |
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
+
+      - name: Verify ReMCoteHost.exe
+        run: |
+          $exe = "build\bin\Release\ReMCoteHost.exe"
+          if (-not (Test-Path $exe)) { throw "ReMCoteHost.exe not found at $exe" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $exe dist\ReMCoteHost.exe -Force
+          Get-Item dist\ReMCoteHost.exe | Format-List Name, Length
+
+      - name: CI self-test (no GPU required)
+        run: |
+          $p = Start-Process -FilePath "dist\ReMCoteHost.exe" -ArgumentList "--ci-self-test" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "CI self-test failed with exit code $($p.ExitCode)" }
+          Write-Host "CI self-test passed"
+
+      - name: Download VC++ redistributable
+        run: |
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile installer\vc_redist.x64.exe
+          Get-Item installer\vc_redist.x64.exe | Format-List Name, Length
+
+      - name: Build installer (Inno Setup)
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\ReMCoteSetup.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed" }
+          if (-not (Test-Path installer\output\ReMCoteSetup.exe)) { throw "ReMCoteSetup.exe not produced" }
+
+      - name: Package developer ZIP
+        run: |
+          Copy-Item README.txt dist\README.txt -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist\* -DestinationPath ReMCoteHost-Windows.zip -Force
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ReMCoteHost-Windows
-          path: artifact-stage/
-          if-no-files-found: error
+          name: ReMCote-Windows
+          path: |
+            windows-host/installer/output/ReMCoteSetup.exe
+            windows-host/ReMCoteHost-Windows.zip
+
+      - name: Publish GitHub Release (tag latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "ReMCote for Windows — Latest"
+          body: |
+            Download **ReMCoteSetup.exe**, run it, and ReMCote opens with your Device ID.
+            Connect from another computer at https://remcote.replit.app
+          files: |
+            windows-host/installer/output/ReMCoteSetup.exe
+            windows-host/ReMCoteHost-Windows.zip
+          make_latest: true
