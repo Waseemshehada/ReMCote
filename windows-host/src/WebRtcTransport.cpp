@@ -148,10 +148,9 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
             auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
                 kVideoSsrc, "remcote-video", kVideoPayloadType,
                 rtc::H264RtpPacketizer::defaultClockRate);
+            s->rtpConfig = rtpConfig;
             auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
                 rtc::NalUnit::Separator::StartSequence, rtpConfig);
-            s->srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
-            packetizer->addToChain(s->srReporter);
             packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
             s->videoTrack->setMediaHandler(packetizer);
             s->videoTrack->onOpen([s] {
@@ -185,7 +184,7 @@ void WebRtcTransport::SendFrame(const EncodedFrame& frame) {
     const uint32_t rtpTs = static_cast<uint32_t>(frame.captureUs * 90 / 1000);
     for (auto& [id, s] : sessions_) {
         if (!s->videoTrack || !s->trackOpen || !s->videoTrack->isOpen()) continue;
-        if (s->srReporter) s->srReporter->rtpConfig->timestamp = rtpTs;
+        if (s->rtpConfig) s->rtpConfig->timestamp = rtpTs;
         try {
             s->videoTrack->send(reinterpret_cast<const std::byte*>(frame.data), frame.size);
             if (!firstFrameSent_.exchange(true)) std::printf("[VIDEO] First frame sent\n");
