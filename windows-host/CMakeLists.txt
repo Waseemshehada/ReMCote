@@ -55,6 +55,7 @@ target_compile_definitions(ReMCoteHost PRIVATE
   UNICODE _UNICODE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
+  RTC_ENABLE_MEDIA=1
 )
 
 set_target_properties(ReMCoteHost PROPERTIES
