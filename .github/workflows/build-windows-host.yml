@@ -1,0 +1,90 @@
+# Builds the ReMCote Windows Host on GitHub-hosted windows-latest runners
+# using the same script a developer runs locally: windows-host/build-windows.ps1
+#
+# Result: a downloadable artifact "ReMCoteHost-Windows" containing
+# ReMCoteHost.exe plus the VC++ runtime DLLs it links against (x64-windows-static-md
+# links all third-party deps statically; only the MSVC CRT is dynamic).
+name: Build Windows Host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "windows-host/**"
+      - ".github/workflows/build-windows-host.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # Persistent binary cache so vcpkg's libdatachannel/openssl builds are
+      # compiled once and restored on later runs.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-bincache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg-bincache
+            windows-host/third_party/vcpkg
+            windows-host/third_party/nv-codec-headers
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('windows-host/vcpkg.json', 'windows-host/CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Create binary cache dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+
+      # windows-latest ships VS 2022 (Desktop C++), CMake, and git — the same
+      # prerequisites build-windows.ps1 checks for. No manual installs needed.
+      - name: Build (windows-host/build-windows.ps1)
+        shell: pwsh
+        working-directory: windows-host
+        run: .\build-windows.ps1
+
+      - name: Stage artifact (exe + required runtime DLLs)
+        shell: pwsh
+        run: |
+          $stage = "artifact-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "windows-host\dist\ReMCoteHost.exe" $stage
+
+          # Any DLLs vcpkg placed next to the exe (none expected with the
+          # static-md triplet, but never ship a broken artifact if that changes).
+          $binDir = "windows-host\build\bin\Release"
+          if (Test-Path $binDir) {
+            Get-ChildItem $binDir -Filter *.dll -ErrorAction SilentlyContinue |
+              Copy-Item -Destination $stage
+          }
+
+          # MSVC CRT redistributable DLLs (the only dynamic dependency of the
+          # static-md triplet besides OS-provided system DLLs).
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $crt = Get-ChildItem "$vsPath\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $crt) { throw "MSVC CRT redist directory not found" }
+          Copy-Item "$($crt.FullName)\*.dll" $stage
+
+          # Ship the run instructions with the binary.
+          Copy-Item "windows-host\README.md" $stage
+          Get-ChildItem $stage
+
+      - name: Smoke-check staged binary exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "artifact-stage\ReMCoteHost.exe")) { throw "ReMCoteHost.exe missing" }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReMCoteHost-Windows
+          path: artifact-stage/
+          if-no-files-found: error
