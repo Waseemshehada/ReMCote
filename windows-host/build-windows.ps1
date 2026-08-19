@@ -24,10 +24,12 @@ $Config = if ($Debug) { "Debug" } else { "Release" }
 # Change these ONLY when intentionally upgrading (update DEPENDENCIES.lock.md too).
 $VcpkgTag     = "2025.04.09"
 $NvHeadersTag = "n12.2.72.0"
+$WebView2Version = "1.0.2792.45"
 
 Write-Host "== ReMCote Host build ($Config) ==" -ForegroundColor Cyan
 Write-Host "   vcpkg tag       : $VcpkgTag"
 Write-Host "   nv-codec tag    : $NvHeadersTag"
+Write-Host "   WebView2 SDK    : $WebView2Version"
 Write-Host ""
 
 # ── 0. Prerequisites check ───────────────────────────────────────────────────
@@ -121,7 +123,23 @@ $NvHeaders = Join-Path $Root "third_party\nv-codec-headers"
 Ensure-PinnedClone -Dir $NvHeaders -Tag $NvHeadersTag `
     -Url "https://github.com/FFmpeg/nv-codec-headers" -Label "nv-codec-headers"
 
-# ── 3. CMake configure ───────────────────────────────────────────────────────
+# ── 3. WebView2 SDK ───────────────────────────────────────────────────────────
+$WebView2Dir = Join-Path $Root "third_party\webview2"
+$WebView2Header = Join-Path $WebView2Dir "build\native\include\WebView2.h"
+if (-not (Test-Path $WebView2Header)) {
+    Write-Host "WebView2 SDK: CACHE MISS — downloading $WebView2Version" -ForegroundColor Yellow
+    if (Test-Path $WebView2Dir) { Remove-Item -Recurse -Force $WebView2Dir }
+    $package = Join-Path $Root "third_party\webview2.zip"
+    Invoke-WebRequest `
+        -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$WebView2Version/microsoft.web.webview2.$WebView2Version.nupkg" `
+        -OutFile $package
+    Expand-Archive -Path $package -DestinationPath $WebView2Dir -Force
+    Remove-Item $package -Force
+}
+if (-not (Test-Path $WebView2Header)) { throw "WebView2 SDK headers were not extracted" }
+Write-Host "WebView2 SDK: READY" -ForegroundColor Green
+
+# ── 4. CMake configure ───────────────────────────────────────────────────────
 $BuildDir = Join-Path $Root "build"
 Write-Host ""
 Write-Host "Configuring..." -ForegroundColor Cyan
@@ -129,16 +147,17 @@ Write-Host "Configuring..." -ForegroundColor Cyan
     -G $generator -A x64 `
     -DCMAKE_TOOLCHAIN_FILE="$VcpkgDir\scripts\buildsystems\vcpkg.cmake" `
     -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
-    -DNVCODEC_SDK_DIR="$NvHeaders\include"
+    -DNVCODEC_SDK_DIR="$NvHeaders\include" `
+    -DWEBVIEW2_SDK_DIR="$WebView2Dir"
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
-# ── 4. Compile ───────────────────────────────────────────────────────────────
+# ── 5. Compile ───────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "Compiling..." -ForegroundColor Cyan
 & $cmake --build $BuildDir --config $Config --parallel
 if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
 
-# ── 5. Package ───────────────────────────────────────────────────────────────
+# ── 6. Package ───────────────────────────────────────────────────────────────
 $Dist = Join-Path $Root "dist"
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 Copy-Item (Join-Path $BuildDir "bin\$Config\ReMCoteHost.exe") (Join-Path $Dist "ReMCoteHost.exe") -Force

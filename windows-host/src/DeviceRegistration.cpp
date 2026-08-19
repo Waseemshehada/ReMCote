@@ -1,5 +1,7 @@
 #include "DeviceRegistration.h"
+#include "Logger.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -57,7 +59,7 @@ void DeviceRegistration::Connect() {
 
     ws_->onOpen([this] {
         connected_ = true;
-        std::printf("[SIGNAL] connected to %s\n", serverUrl_.c_str());
+        Logger::Infof("Signaling socket connected: %s", Logger::RedactUrl(serverUrl_).c_str());
         json reg = {
             {"type", "host-register"},
             {"name", "ReMCote Host"},
@@ -86,7 +88,7 @@ void DeviceRegistration::Connect() {
 
     ws_->onClosed([this] {
         connected_ = false;
-        std::fprintf(stderr, "[SIGNAL] connection closed\n");
+        Logger::Warning("Signaling socket closed; reconnecting in 2 seconds");
         if (running_) {
             std::this_thread::sleep_for(std::chrono::seconds(2));
             if (running_) Connect(); // auto-reconnect keeps the device ONLINE
@@ -96,7 +98,7 @@ void DeviceRegistration::Connect() {
     try {
         ws_->open(serverUrl_);
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "[SIGNAL] open failed: %s\n", e.what());
+        Logger::Errorf("Signaling socket failed to open: %s", e.what());
     }
 }
 
@@ -105,6 +107,7 @@ void DeviceRegistration::HandleMessage(const std::string& text) {
     try {
         msg = json::parse(text);
     } catch (...) {
+        Logger::Warning("Ignored malformed signaling message");
         return;
     }
     const std::string type = msg.value("type", "");
@@ -113,26 +116,42 @@ void DeviceRegistration::HandleMessage(const std::string& text) {
         publicDeviceId_ = msg.value("publicDeviceId", "");
         secretToken_ = msg.value("secretToken", secretToken_);
         SaveIdentity(publicDeviceId_, secretToken_);
-        std::vector<std::string> iceServers;
+        std::vector<IceServerCfg> iceServers;
         if (msg.contains("iceServers")) {
             for (const auto& s : msg["iceServers"]) {
-                if (s.contains("urls")) {
-                    for (const auto& u : s["urls"]) iceServers.push_back(u.get<std::string>());
+                if (!s.contains("urls")) continue;
+                const std::string username   = s.value("username",   "");
+                const std::string credential = s.value("credential", "");
+                for (const auto& u : s["urls"]) {
+                    IceServerCfg cfg;
+                    cfg.url        = u.get<std::string>();
+                    cfg.username   = username;
+                    cfg.credential = credential;
+                    iceServers.push_back(std::move(cfg));
                 }
             }
         }
-        std::printf("[SIGNAL] registered as %s\n", publicDeviceId_.c_str());
+        const bool hasTurn = std::any_of(iceServers.begin(), iceServers.end(),
+            [](const IceServerCfg& c) {
+                return c.url.rfind("turn:", 0) == 0 || c.url.rfind("turns:", 0) == 0;
+            });
+        Logger::Infof("Device registration complete: %zu ICE server(s), TURN relay %s",
+                      iceServers.size(), hasTurn ? "AVAILABLE" : "NOT configured");
         if (onRegistered_) onRegistered_(publicDeviceId_, iceServers);
     } else if (type == "host-connect-request") {
+        Logger::Info("Signaling server forwarded a connection request");
         if (onConnectRequest_)
             onConnectRequest_(msg.value("sessionId", ""), msg.value("clientDescription", ""));
     } else if (type == "host-peer-signal") {
+        Logger::Debug("Received a WebRTC signaling message from the remote viewer");
         if (onPeerSignal_) onPeerSignal_(msg.value("sessionId", ""), msg.value("payload", json{}));
     } else if (type == "host-session-ended") {
         if (onSessionEnded_)
             onSessionEnded_(msg.value("sessionId", ""), msg.value("reason", ""));
     } else if (type == "error") {
-        std::fprintf(stderr, "[SIGNAL] server error: %s\n", msg.value("message", "").c_str());
+        Logger::Error("Signaling server returned an error response");
+    } else {
+        Logger::Debug("Ignored an unhandled signaling message type");
     }
 }
 
@@ -150,7 +169,11 @@ void DeviceRegistration::NotifySessionClosed(const std::string& sessionId, const
 
 void DeviceRegistration::Send(const json& msg) {
     if (ws_ && connected_) {
-        try { ws_->send(msg.dump()); } catch (...) {}
+        try {
+            ws_->send(msg.dump());
+        } catch (const std::exception& e) {
+            Logger::Errorf("Could not send signaling message: %s", e.what());
+        }
     }
 }
 

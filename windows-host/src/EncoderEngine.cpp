@@ -1,4 +1,5 @@
 #include "EncoderEngine.h"
+#include "Logger.h"
 
 #include <cstdio>
 #include <cstring>
@@ -23,17 +24,21 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     // nvEncodeAPI ships with the NVIDIA driver — load it dynamically.
     hModule_ = LoadLibraryA("nvEncodeAPI64.dll");
     if (!hModule_) {
-        std::fprintf(stderr, "[NVENC] nvEncodeAPI64.dll not found. An NVIDIA GPU with a current driver is required.\n");
+        Logger::Error("NVENC driver DLL was not found; an NVIDIA GPU with a current driver is required");
         return false;
     }
     auto createInstance = reinterpret_cast<PFN_NvEncodeAPICreateInstance>(
         GetProcAddress(static_cast<HMODULE>(hModule_), "NvEncodeAPICreateInstance"));
-    if (!createInstance) return false;
+    if (!createInstance) {
+        Logger::Error("NVENC API entry point NvEncodeAPICreateInstance is unavailable");
+        return false;
+    }
 
     api_ = new NV_ENCODE_API_FUNCTION_LIST{};
     Api(api_)->version = NV_ENCODE_API_FUNCTION_LIST_VER;
-    if (createInstance(Api(api_)) != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] NvEncodeAPICreateInstance failed\n");
+    const NVENCSTATUS instanceStatus = createInstance(Api(api_));
+    if (instanceStatus != NV_ENC_SUCCESS) {
+        Logger::Errorf("NVENC API instance creation failed (status %d)", instanceStatus);
         return false;
     }
 
@@ -42,8 +47,9 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     open.device = device;
     open.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
     open.apiVersion = NVENCAPI_VERSION;
-    if (Api(api_)->nvEncOpenEncodeSessionEx(&open, &encoder_) != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] open session failed\n");
+    const NVENCSTATUS openStatus = Api(api_)->nvEncOpenEncodeSessionEx(&open, &encoder_);
+    if (openStatus != NV_ENC_SUCCESS) {
+        Logger::Errorf("NVENC encoder session open failed (status %d)", openStatus);
         return false;
     }
 
@@ -80,8 +86,9 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     encCfg.encodeCodecConfig.h264Config.sliceModeData = 0;
     init.encodeConfig = &encCfg;
 
-    if (Api(api_)->nvEncInitializeEncoder(encoder_, &init) != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] initialize failed\n");
+    const NVENCSTATUS initializeStatus = Api(api_)->nvEncInitializeEncoder(encoder_, &init);
+    if (initializeStatus != NV_ENC_SUCCESS) {
+        Logger::Errorf("NVENC encoder initialization failed (status %d)", initializeStatus);
         return false;
     }
 
@@ -96,7 +103,11 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_RENDER_TARGET;
-    if (FAILED(device->CreateTexture2D(&td, nullptr, inputTexture_.GetAddressOf()))) return false;
+    const HRESULT textureResult = device->CreateTexture2D(&td, nullptr, inputTexture_.GetAddressOf());
+    if (FAILED(textureResult)) {
+        Logger::Errorf("NVENC input texture creation failed (0x%08lx)", textureResult);
+        return false;
+    }
 
     NV_ENC_REGISTER_RESOURCE reg{};
     reg.version = NV_ENC_REGISTER_RESOURCE_VER;
@@ -105,16 +116,24 @@ bool EncoderEngine::Initialize(ID3D11Device* device, const EncoderConfig& config
     reg.width = config.width;
     reg.height = config.height;
     reg.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
-    if (Api(api_)->nvEncRegisterResource(encoder_, &reg) != NV_ENC_SUCCESS) return false;
+    const NVENCSTATUS registerStatus = Api(api_)->nvEncRegisterResource(encoder_, &reg);
+    if (registerStatus != NV_ENC_SUCCESS) {
+        Logger::Errorf("NVENC input-resource registration failed (status %d)", registerStatus);
+        return false;
+    }
     inputResource_ = reg.registeredResource;
 
     NV_ENC_CREATE_BITSTREAM_BUFFER bs{};
     bs.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
-    if (Api(api_)->nvEncCreateBitstreamBuffer(encoder_, &bs) != NV_ENC_SUCCESS) return false;
+    const NVENCSTATUS bitstreamStatus = Api(api_)->nvEncCreateBitstreamBuffer(encoder_, &bs);
+    if (bitstreamStatus != NV_ENC_SUCCESS) {
+        Logger::Errorf("NVENC bitstream-buffer creation failed (status %d)", bitstreamStatus);
+        return false;
+    }
     bitstreamBuffer_ = bs.bitstreamBuffer;
 
-    std::printf("[NVENC] initialized %dx%d @ %d fps, %d kbps CBR, ultra-low-latency\n",
-                config.width, config.height, config.fps, config.bitrateKbps);
+    Logger::Infof("NVENC initialized: %dx%d @ %d fps, %d kbps CBR, ultra-low latency",
+                  config.width, config.height, config.fps, config.bitrateKbps);
     return true;
 }
 
@@ -130,6 +149,8 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = inputResource_;
     if (Api(api_)->nvEncMapInputResource(encoder_, &map) != NV_ENC_SUCCESS) {
+        Logger::WarningRateLimited("nvenc-map-frame",
+                                   "NVENC could not map an input frame; dropping frames until it recovers");
         busy_ = false;
         return false;
     }
@@ -150,6 +171,8 @@ bool EncoderEngine::SubmitFrame(ID3D11Texture2D* frame, int64_t captureUs) {
     // Synchronous encode: low-latency presets emit one output per input.
     NVENCSTATUS st = Api(api_)->nvEncEncodePicture(encoder_, &pic);
     if (st != NV_ENC_SUCCESS) {
+        Logger::WarningRateLimited("nvenc-encode-frame",
+                                   "NVENC could not encode frames; dropping frames until it recovers");
         Api(api_)->nvEncUnmapInputResource(encoder_, map.mappedResource);
         busy_ = false;
         return false;
@@ -193,7 +216,7 @@ void EncoderEngine::SetBitrate(int kbps) {
     re.forceIDR = 0;
     Api(api_)->nvEncReconfigureEncoder(encoder_, &re);
     config_.bitrateKbps = kbps;
-    std::printf("[NVENC] bitrate reconfigured to %d kbps\n", kbps);
+    Logger::Infof("NVENC bitrate reconfigured to %d kbps", kbps);
 }
 
 void EncoderEngine::Shutdown() {

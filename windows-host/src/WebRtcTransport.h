@@ -26,7 +26,7 @@ public:
     using KeyframeRequest = std::function<void()>;
     using SessionEnded = std::function<void(const std::string& sessionId)>;
 
-    WebRtcTransport(InputEngine& input, std::vector<std::string> iceServers);
+    WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> iceServers);
 
     void SetSignalOut(SignalOut cb) { signalOut_ = std::move(cb); }
     void SetBitrateRequest(BitrateRequest cb) { bitrateRequest_ = std::move(cb); }
@@ -61,7 +61,7 @@ private:
     void HandlePointerBinary(const rtc::binary& data);
 
     InputEngine& input_;
-    std::vector<std::string> iceServers_;
+    std::vector<IceServerCfg> iceServers_;
     SignalOut signalOut_;
     BitrateRequest bitrateRequest_;
     KeyframeRequest keyframeRequest_;

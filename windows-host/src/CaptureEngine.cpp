@@ -1,4 +1,5 @@
 #include "CaptureEngine.h"
+#include "Logger.h"
 
 #include <chrono>
 #include <cstdio>
@@ -26,7 +27,7 @@ bool CaptureEngine::Initialize() {
         0, nullptr, 0, D3D11_SDK_VERSION,
         device_.GetAddressOf(), &level, context_.GetAddressOf());
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[CAPTURE] D3D11CreateDevice failed: 0x%08lx\n", hr);
+        Logger::Errorf("Capture: D3D11CreateDevice failed (0x%08lx)", hr);
         return false;
     }
 
@@ -44,7 +45,7 @@ bool CaptureEngine::Initialize() {
     // Primary monitor only for MVP (spec §8).
     ComPtr<IDXGIOutput> output;
     if (FAILED(adapter->EnumOutputs(0, output.GetAddressOf()))) {
-        std::fprintf(stderr, "[CAPTURE] no output found\n");
+        Logger::Error("Capture: no primary display output was found");
         return false;
     }
     ComPtr<IDXGIOutput1> output1;
@@ -52,7 +53,7 @@ bool CaptureEngine::Initialize() {
 
     HRESULT dupHr = output1->DuplicateOutput(device_.Get(), duplication_.GetAddressOf());
     if (FAILED(dupHr)) {
-        std::fprintf(stderr, "[CAPTURE] DuplicateOutput failed: 0x%08lx\n", dupHr);
+        Logger::Errorf("Capture: DuplicateOutput failed (0x%08lx)", dupHr);
         return false;
     }
 
@@ -75,11 +76,12 @@ bool CaptureEngine::Initialize() {
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     if (FAILED(device_->CreateTexture2D(&td, nullptr, stagingFrame_.GetAddressOf()))) {
-        std::fprintf(stderr, "[CAPTURE] frame texture creation failed\n");
+        Logger::Error("Capture: GPU frame texture creation failed");
         return false;
     }
 
-    std::printf("[CAPTURE] %dx%d @ %d (GPU: %s)\n", width_, height_, refreshHz_, gpuName_.c_str());
+    Logger::Infof("Capture initialized: %dx%d @ %d Hz on %s",
+                  width_, height_, refreshHz_, gpuName_.c_str());
     return true;
 }
 
@@ -117,14 +119,14 @@ void CaptureEngine::CaptureLoop() {
         }
         if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) {
             // Display mode changed / desktop switched — rebuild duplication.
-            std::fprintf(stderr, "[CAPTURE] access lost, reinitializing\n");
+            Logger::Warning("Capture access lost; reinitializing desktop duplication");
             if (!Reinitialize()) {
                 Sleep(1000);
             }
             continue;
         }
         if (FAILED(hr)) {
-            std::fprintf(stderr, "[CAPTURE] AcquireNextFrame failed: 0x%08lx\n", hr);
+            Logger::Errorf("Capture: AcquireNextFrame failed (0x%08lx)", hr);
             Sleep(100);
             continue;
         }

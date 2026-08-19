@@ -1,4 +1,5 @@
 #include "InputEngine.h"
+#include "Logger.h"
 
 #include <windows.h>
 #include <cstdio>
@@ -110,7 +111,7 @@ void InputEngine::Inject(const InputEvent& ev) {
         uint32_t sc = ev.scanCode;
         if (sc == 0) {
             // Unmapped code — nothing safe to inject.
-            std::fprintf(stderr, "[INPUT] unmapped key code: %s\n", ev.code.c_str());
+            Logger::Warningf("Input: unmapped key code received: %s", ev.code.c_str());
             return;
         }
         in.ki.dwFlags = KEYEVENTF_SCANCODE;

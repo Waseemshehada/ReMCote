@@ -1,10 +1,19 @@
 #include "HostUI.h"
 
 #include <cstdio>
+#include <sstream>
 
 namespace remcote {
 
-enum ControlId { ID_ALLOW = 1001, ID_DECLINE = 1002, ID_STOP = 1003 };
+enum ControlId {
+    ID_ALLOW = 1001,
+    ID_DECLINE = 1002,
+    ID_STOP = 1003,
+    ID_VIEWER = 1004,
+    ID_COPY_LOG = 1005
+};
+constexpr UINT WM_APP_REFRESH_LOG = WM_APP + 20;
+constexpr UINT WM_APP_REFRESH_UI = WM_APP + 21;
 
 static std::wstring Widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -26,9 +35,9 @@ bool HostUI::Create(HINSTANCE hInstance) {
     RegisterClassExW(&wc);
 
     hwnd_ = CreateWindowExW(
-        0, L"ReMCoteHostWindow", L"ReMCote Host",
+        0, L"ReMCoteHostWindow", L"ReMCote Desktop",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 440, 560,
+        CW_USEDEFAULT, CW_USEDEFAULT, 440, 820,
         nullptr, nullptr, hInstance, this);
     if (!hwnd_) return false;
 
@@ -38,6 +47,8 @@ bool HostUI::Create(HINSTANCE hInstance) {
                           0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
     fontBody_ = CreateFontW(18, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                             0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    fontLog_ = CreateFontW(14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                           0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
 
     allowBtn_ = CreateWindowW(L"BUTTON", L"ALLOW",
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_ALLOW, hInstance, nullptr);
@@ -45,24 +56,47 @@ bool HostUI::Create(HINSTANCE hInstance) {
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_DECLINE, hInstance, nullptr);
     stopBtn_ = CreateWindowW(L"BUTTON", L"STOP REMOTE SESSION",
         WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_STOP, hInstance, nullptr);
+    viewerBtn_ = CreateWindowW(L"BUTTON", L"CONNECT TO ANOTHER DEVICE",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_VIEWER, hInstance, nullptr);
+    copyLogBtn_ = CreateWindowW(L"BUTTON", L"COPY LOG",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_, (HMENU)ID_COPY_LOG, hInstance, nullptr);
+    logView_ = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY |
+            ES_AUTOVSCROLL | ES_NOHIDESEL,
+        0, 0, 0, 0, hwnd_, nullptr, hInstance, nullptr);
     SendMessageW(allowBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(declineBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
     SendMessageW(stopBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
+    SendMessageW(viewerBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
+    SendMessageW(copyLogBtn_, WM_SETFONT, (WPARAM)fontBody_, TRUE);
+    SendMessageW(logView_, WM_SETFONT, (WPARAM)fontLog_, TRUE);
 
     Layout();
+    RefreshLogView();
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
     return true;
 }
 
 void HostUI::Layout() {
+    bool requestPending = false;
+    bool sessionActive = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        requestPending = requestPending_;
+        sessionActive = sessionActive_;
+    }
     // Approval buttons appear only while a request is pending.
-    ShowWindow(allowBtn_, requestPending_ ? SW_SHOW : SW_HIDE);
-    ShowWindow(declineBtn_, requestPending_ ? SW_SHOW : SW_HIDE);
-    ShowWindow(stopBtn_, sessionActive_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(allowBtn_, requestPending ? SW_SHOW : SW_HIDE);
+    ShowWindow(declineBtn_, requestPending ? SW_SHOW : SW_HIDE);
+    ShowWindow(stopBtn_, sessionActive ? SW_SHOW : SW_HIDE);
     MoveWindow(declineBtn_, 30, 360, 170, 54, TRUE);
     MoveWindow(allowBtn_, 224, 360, 170, 54, TRUE);
-    MoveWindow(stopBtn_, 30, 440, 364, 48, TRUE);
+    MoveWindow(stopBtn_, 30, 360, 364, 54, TRUE);
+    MoveWindow(viewerBtn_, 30, 458, 178, 48, TRUE);
+    MoveWindow(copyLogBtn_, 216, 458, 178, 48, TRUE);
+    MoveWindow(logView_, 30, 540, 364, 220, TRUE);
 }
 
 int HostUI::RunMessageLoop() {
@@ -99,6 +133,27 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (self->telemetryProvider_) self->UpdateTelemetry(self->telemetryProvider_());
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_APP_REFRESH_LOG:
+        self->logRefreshPending_ = false;
+        self->RefreshLogView();
+        return 0;
+    case WM_APP_REFRESH_UI: {
+        self->uiRefreshPending_ = false;
+        if (self->bringToFrontPending_.exchange(false)) {
+            SetForegroundWindow(hwnd);
+            FlashWindow(hwnd, TRUE);
+        }
+        self->Layout();
+        bool active = false;
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            active = self->sessionActive_;
+        }
+        if (active) SetTimer(hwnd, 1, 1000, nullptr);
+        else KillTimer(hwnd, 1);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
         std::string sid;
@@ -107,15 +162,25 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             sid = self->pendingSessionId_;
         }
         if (id == ID_ALLOW) {
-            self->requestPending_ = false;
+            {
+                std::lock_guard<std::mutex> lock(self->mutex_);
+                self->requestPending_ = false;
+            }
             self->Layout();
             if (self->onApproval_) self->onApproval_(sid, true);
         } else if (id == ID_DECLINE) {
-            self->requestPending_ = false;
+            {
+                std::lock_guard<std::mutex> lock(self->mutex_);
+                self->requestPending_ = false;
+            }
             self->Layout();
             if (self->onApproval_) self->onApproval_(sid, false);
         } else if (id == ID_STOP) {
             if (self->onStopSession_) self->onStopSession_();
+        } else if (id == ID_VIEWER) {
+            if (self->onViewer_) self->onViewer_();
+        } else if (id == ID_COPY_LOG) {
+            self->CopyLogsToClipboard();
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
@@ -172,25 +237,74 @@ void HostUI::OnPaint(HDC hdc) {
         DrawText(hdc, 30, 300, L"REMOTE SESSION ACTIVE", green, fontBody_);
         DrawText(hdc, 30, 324, buf, grey, fontBody_);
     }
+    DrawText(hdc, 30, 424, L"CONNECT FROM THIS APP", grey, fontBody_);
+    DrawText(hdc, 30, 512, L"DIAGNOSTIC LOG", grey, fontBody_);
 }
 
 // --- thread-safe setters ---------------------------------------------------
 
 void HostUI::SetDeviceId(const std::string& id) {
     { std::lock_guard<std::mutex> l(mutex_); deviceId_ = id; }
-    if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    QueueUiRefresh();
 }
 void HostUI::SetOnline(bool online) {
     { std::lock_guard<std::mutex> l(mutex_); online_ = online; }
-    if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    QueueUiRefresh();
 }
 void HostUI::SetGpuInfo(const std::string& gpu, const std::string& encoder) {
     { std::lock_guard<std::mutex> l(mutex_); gpu_ = gpu; encoder_ = encoder; }
-    if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    QueueUiRefresh();
 }
 void HostUI::SetStatusLine(const std::string& text) {
     { std::lock_guard<std::mutex> l(mutex_); status_ = text; }
-    if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    QueueUiRefresh();
+}
+
+void HostUI::AppendLog(const std::string& line) {
+    {
+        std::lock_guard<std::mutex> l(mutex_);
+        logLines_.push_back(line);
+        while (logLines_.size() > 500) logLines_.pop_front();
+    }
+    if (hwnd_ && !logRefreshPending_.exchange(true)) {
+        PostMessageW(hwnd_, WM_APP_REFRESH_LOG, 0, 0);
+    }
+}
+
+void HostUI::RefreshLogView() {
+    if (!logView_) return;
+
+    std::string text;
+    {
+        std::lock_guard<std::mutex> l(mutex_);
+        for (const auto& line : logLines_) {
+            text += line;
+            text += "\r\n";
+        }
+    }
+
+    SetWindowTextW(logView_, Widen(text).c_str());
+    SendMessageW(logView_, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+    SendMessageW(logView_, EM_SCROLLCARET, 0, 0);
+}
+
+void HostUI::CopyLogsToClipboard() {
+    if (!logView_ || !OpenClipboard(hwnd_)) return;
+    EmptyClipboard();
+
+    const int length = GetWindowTextLengthW(logView_);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(length + 1) * sizeof(wchar_t));
+    if (memory) {
+        auto* target = static_cast<wchar_t*>(GlobalLock(memory));
+        if (target) {
+            GetWindowTextW(logView_, target, length + 1);
+            GlobalUnlock(memory);
+            SetClipboardData(CF_UNICODETEXT, memory);
+            memory = nullptr;
+        }
+    }
+    if (memory) GlobalFree(memory);
+    CloseClipboard();
 }
 void HostUI::ShowConnectionRequest(const std::string& sessionId, const std::string& description) {
     {
@@ -199,12 +313,7 @@ void HostUI::ShowConnectionRequest(const std::string& sessionId, const std::stri
         requestDescription_ = description;
         requestPending_ = true;
     }
-    if (hwnd_) {
-        SetForegroundWindow(hwnd_);
-        FlashWindow(hwnd_, TRUE);
-        Layout();
-        InvalidateRect(hwnd_, nullptr, FALSE);
-    }
+    QueueUiRefresh(true);
 }
 void HostUI::OnSessionActive(bool active) {
     {
@@ -212,15 +321,17 @@ void HostUI::OnSessionActive(bool active) {
         sessionActive_ = active;
         if (active) requestPending_ = false;
     }
-    if (hwnd_) {
-        if (active) SetTimer(hwnd_, 1, 1000, nullptr);
-        else KillTimer(hwnd_, 1);
-        Layout();
-        InvalidateRect(hwnd_, nullptr, FALSE);
-    }
+    QueueUiRefresh();
 }
 void HostUI::UpdateTelemetry(const PerformanceMonitor::Snapshot& snap) {
     { std::lock_guard<std::mutex> l(mutex_); telemetry_ = snap; }
+}
+
+void HostUI::QueueUiRefresh(bool bringToFront) {
+    if (bringToFront) bringToFrontPending_ = true;
+    if (hwnd_ && !uiRefreshPending_.exchange(true)) {
+        PostMessageW(hwnd_, WM_APP_REFRESH_UI, 0, 0);
+    }
 }
 
 } // namespace remcote

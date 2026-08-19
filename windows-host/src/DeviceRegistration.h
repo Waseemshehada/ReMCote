@@ -22,7 +22,7 @@ public:
     using PeerSignal = std::function<void(const std::string& sessionId, const nlohmann::json& payload)>;
     using SessionEnded = std::function<void(const std::string& sessionId, const std::string& reason)>;
     using Registered = std::function<void(const std::string& publicDeviceId,
-                                          const std::vector<std::string>& iceServers)>;
+                                          const std::vector<IceServerCfg>& iceServers)>;
 
     DeviceRegistration(std::string serverUrl, HostCapabilities caps);
     ~DeviceRegistration();

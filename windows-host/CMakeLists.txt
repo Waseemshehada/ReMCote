@@ -23,6 +23,16 @@ if(NVCODEC_SDK_DIR STREQUAL "")
   set(NVCODEC_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
 endif()
 
+# Microsoft Edge WebView2 SDK. The CI workflow downloads this pinned NuGet
+# package before configuring CMake; the static loader keeps the EXE self-contained.
+set(WEBVIEW2_SDK_DIR "" CACHE PATH "Path to extracted Microsoft.Web.WebView2 NuGet package")
+if(WEBVIEW2_SDK_DIR STREQUAL "")
+  set(WEBVIEW2_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2")
+endif()
+if(NOT EXISTS "${WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
+  message(FATAL_ERROR "WebView2 SDK not found. Set WEBVIEW2_SDK_DIR or run the Windows build workflow.")
+endif()
+
 add_executable(ReMCoteHost WIN32
   src/main.cpp
   src/DeviceRegistration.cpp
@@ -32,11 +42,14 @@ add_executable(ReMCoteHost WIN32
   src/InputEngine.cpp
   src/PerformanceMonitor.cpp
   src/HostUI.cpp
+  src/Logger.cpp
+  src/DesktopViewer.cpp
 )
 
 target_include_directories(ReMCoteHost PRIVATE
   src
   ${NVCODEC_SDK_DIR}
+  "${WEBVIEW2_SDK_DIR}/build/native/include"
 )
 
 target_link_libraries(ReMCoteHost PRIVATE
@@ -49,12 +62,14 @@ target_link_libraries(ReMCoteHost PRIVATE
   gdi32
   shell32
   ole32
+  "${WEBVIEW2_SDK_DIR}/build/native/x64/WebView2LoaderStatic.lib"
 )
 
 target_compile_definitions(ReMCoteHost PRIVATE
   UNICODE _UNICODE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
+  WEBVIEW2_STATIC
 )
 
 set_target_properties(ReMCoteHost PROPERTIES

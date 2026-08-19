@@ -1,4 +1,5 @@
 #include "WebRtcTransport.h"
+#include "Logger.h"
 
 #include <cstdio>
 #include <cstring>
@@ -11,22 +12,31 @@ namespace remcote {
 static constexpr int kVideoPayloadType = 96;
 static constexpr uint32_t kVideoSsrc = 42;
 
-WebRtcTransport::WebRtcTransport(InputEngine& input, std::vector<std::string> iceServers)
-    : input_(input), iceServers_(std::move(iceServers)) {}
+WebRtcTransport::WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> iceServers)
+    : input_(input), iceServers_(std::move(iceServers)) {
+    Logger::Infof("WebRTC transport initialized with %zu ICE server(s)", iceServers_.size());
+}
 
 std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const std::string& sessionId) {
     rtc::Configuration config;
-    for (const auto& s : iceServers_) config.iceServers.emplace_back(s);
-    // Prefer direct P2P; TURN (if present in iceServers_) is fallback only.
+    for (const auto& cfg : iceServers_) {
+        rtc::IceServer srv(cfg.url);
+        if (!cfg.username.empty())   srv.username = cfg.username;
+        if (!cfg.credential.empty()) srv.password = cfg.credential;
+        config.iceServers.push_back(std::move(srv));
+    }
+    // Prefer direct P2P; TURN (if present in iceServers_) is used as relay fallback only.
 
     auto s = std::make_shared<Session>();
     s->pc = std::make_shared<rtc::PeerConnection>(config);
 
     s->pc->onLocalDescription([this, sessionId](rtc::Description desc) {
+        Logger::Debugf("Generated local WebRTC %s description", desc.typeString().c_str());
         json payload = {{"kind", desc.typeString()}, {"sdp", std::string(desc)}};
         if (signalOut_) signalOut_(sessionId, payload);
     });
     s->pc->onLocalCandidate([this, sessionId](rtc::Candidate cand) {
+        Logger::Debug("Generated a local ICE candidate");
         json payload = {
             {"kind", "candidate"},
             {"candidate", std::string(cand)},
@@ -36,12 +46,12 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
     });
     s->pc->onStateChange([this, sessionId](rtc::PeerConnection::State state) {
         if (state == rtc::PeerConnection::State::Connected) {
-            std::printf("[WEBRTC] Peer connected\n");
+            Logger::Info("WebRTC peer connected");
         }
         if (state == rtc::PeerConnection::State::Disconnected ||
             state == rtc::PeerConnection::State::Failed ||
             state == rtc::PeerConnection::State::Closed) {
-            std::printf("[RTC] session %s peer state terminal\n", sessionId.c_str());
+            Logger::Warning("WebRTC peer entered a terminal state");
             if (sessionEnded_) sessionEnded_(sessionId);
         }
     });
@@ -57,7 +67,7 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
 void WebRtcTransport::WireDataChannel(const std::shared_ptr<Session>& s,
                                       std::shared_ptr<rtc::DataChannel> ch) {
     const std::string label = ch->label();
-    std::printf("[WEBRTC] DataChannel opened: %s\n", label.c_str());
+    Logger::Infof("WebRTC data channel opened: %s", label.c_str());
     if (label == kPointerChannel) {
         s->pointerCh = ch;
         ch->onMessage(
@@ -155,7 +165,7 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
             s->videoTrack->setMediaHandler(packetizer);
             s->videoTrack->onOpen([s] {
                 s->trackOpen = true;
-                std::printf("[WEBRTC] Video track active\n");
+                Logger::Info("WebRTC video track is active");
             });
             // A NACK / PLI from the client means "send me a keyframe now."
             s->videoTrack->onMessage([this](rtc::binary) {}, [](rtc::string) {});
@@ -167,13 +177,16 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
 
     const std::string kind = payload.value("kind", "");
     if (kind == "offer") {
-        std::printf("[WEBRTC] Offer received — creating answer\n");
+        Logger::Info("WebRTC offer received; creating answer");
         s->pc->setRemoteDescription(rtc::Description(payload.value("sdp", ""), "offer"));
         // libdatachannel auto-creates the answer via onLocalDescription.
     } else if (kind == "candidate") {
         std::string cand = payload.value("candidate", "");
         std::string mid = payload.value("sdpMid", "0");
-        if (!cand.empty()) s->pc->addRemoteCandidate(rtc::Candidate(cand, mid));
+        if (!cand.empty()) {
+            s->pc->addRemoteCandidate(rtc::Candidate(cand, mid));
+            Logger::Debug("Accepted a remote ICE candidate");
+        }
     }
 }
 
@@ -187,9 +200,9 @@ void WebRtcTransport::SendFrame(const EncodedFrame& frame) {
         if (s->rtpConfig) s->rtpConfig->timestamp = rtpTs;
         try {
             s->videoTrack->send(reinterpret_cast<const std::byte*>(frame.data), frame.size);
-            if (!firstFrameSent_.exchange(true)) std::printf("[VIDEO] First frame sent\n");
+            if (!firstFrameSent_.exchange(true)) Logger::Info("First video frame sent over WebRTC");
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[RTC] send failed: %s\n", e.what());
+            Logger::Errorf("WebRTC video-frame send failed: %s", e.what());
         }
     }
 }

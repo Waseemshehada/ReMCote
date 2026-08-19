@@ -32,6 +32,13 @@ struct HostCapabilities {
     int desktopHz = 0;
 };
 
+// Full ICE server configuration including optional TURN credentials.
+struct IceServerCfg {
+    std::string url;
+    std::string username;   // empty for STUN-only entries
+    std::string credential; // empty for STUN-only entries
+};
+
 // One encoded H.264 access unit (Annex-B), ready for RTP packetization.
 struct EncodedFrame {
     const uint8_t* data = nullptr;

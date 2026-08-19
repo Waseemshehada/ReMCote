@@ -8,16 +8,19 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <windows.h>
 
 #include "CaptureEngine.h"
+#include "DesktopViewer.h"
 #include "DeviceRegistration.h"
 #include "EncoderEngine.h"
 #include "HostUI.h"
 #include "InputEngine.h"
+#include "Logger.h"
 #include "PerformanceMonitor.h"
 #include "WebRtcTransport.h"
 
@@ -38,6 +41,20 @@ using namespace remcote;
 static const char* kDefaultSignalingUrl = "wss://remcote.replit.app/api/ws";
 
 namespace {
+
+class ComApartment {
+public:
+    ComApartment() : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
+    ~ComApartment() {
+        if (SUCCEEDED(result_)) CoUninitialize();
+    }
+
+    bool Ready() const { return SUCCEEDED(result_); }
+    HRESULT Result() const { return result_; }
+
+private:
+    HRESULT result_;
+};
 
 struct SignalingConfig {
     std::string url;
@@ -61,15 +78,22 @@ SignalingConfig ResolveSignaling() {
 
 // ─── Logging setup ────────────────────────────────────────────────────────────
 
+std::string DefaultLogPath() {
+    const char* localAppData = std::getenv("LOCALAPPDATA");
+    std::filesystem::path directory = localAppData && *localAppData
+        ? std::filesystem::path(localAppData)
+        : std::filesystem::current_path();
+    directory /= "ReMCote";
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    return (directory / "remcote-host.log").string();
+}
+
 void SetupLogging() {
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
         FILE* f = nullptr;
         freopen_s(&f, "CONOUT$", "w", stdout);
         freopen_s(&f, "CONOUT$", "w", stderr);
-    } else {
-        FILE* f = nullptr;
-        freopen_s(&f, "remcote-host.log", "w", stdout);
-        freopen_s(&f, "remcote-host.log", "a", stderr);
     }
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
@@ -119,6 +143,27 @@ static int CiSelfTest() {
                 nvenc ? "PRESENT" : "ABSENT");
     if (nvenc) FreeLibrary(nvenc);
 
+    // Test 4: WebView2 Runtime — the installed desktop viewer needs this.
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(comResult)) {
+        std::printf("[TEST] WebView2 COM apartment      FAIL (0x%08lx)\n",
+                    static_cast<unsigned long>(comResult));
+        pass = false;
+    } else {
+        LPWSTR webViewVersion = nullptr;
+        const HRESULT runtimeResult =
+            GetAvailableCoreWebView2BrowserVersionString(nullptr, &webViewVersion);
+        const bool runtimeAvailable = SUCCEEDED(runtimeResult) && webViewVersion != nullptr;
+        std::printf("[TEST] WebView2 Runtime            %s%s%s\n",
+                    runtimeAvailable ? "PASS" : "FAIL",
+                    runtimeAvailable ? "  (" : "",
+                    runtimeAvailable ? webViewVersion : "");
+        if (runtimeAvailable) std::printf(")\n");
+        if (webViewVersion) CoTaskMemFree(webViewVersion);
+        CoUninitialize();
+        if (!runtimeAvailable) pass = false;
+    }
+
     std::printf("=== CI Self-Test: %s ===\n", pass ? "PASS" : "FAIL");
     return pass ? 0 : 1;
 }
@@ -128,7 +173,7 @@ static int CiSelfTest() {
 const char* PassFail(bool ok) { return ok ? "PASS" : "FAIL"; }
 
 bool RunPreflight(const std::string& serverUrl) {
-    std::printf("ReMCote Host Preflight\n");
+    Logger::Info("Starting host preflight checks");
 
     using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
     RTL_OSVERSIONINFOW ver{};
@@ -139,24 +184,25 @@ bool RunPreflight(const std::string& serverUrl) {
             winOk = fn(&ver) == 0 && ver.dwMajorVersion >= 10;
         }
     }
-    std::printf("  Windows %lu.%lu build %-12lu %s\n",
-                ver.dwMajorVersion, ver.dwMinorVersion, ver.dwBuildNumber, PassFail(winOk));
+    Logger::Infof("Windows %lu.%lu build %lu: %s",
+                  ver.dwMajorVersion, ver.dwMinorVersion, ver.dwBuildNumber, PassFail(winOk));
 
     HMODULE nvenc = LoadLibraryW(L"nvEncodeAPI64.dll");
-    std::printf("  NVENC H.264 (nvEncodeAPI64.dll)  %s\n", PassFail(nvenc != nullptr));
+    Logger::Infof("NVENC driver availability: %s", PassFail(nvenc != nullptr));
     if (nvenc) FreeLibrary(nvenc);
 
     HMODULE d3d = LoadLibraryW(L"d3d11.dll");
-    std::printf("  Direct3D 11                      %s\n", PassFail(d3d != nullptr));
+    Logger::Infof("Direct3D 11 availability: %s", PassFail(d3d != nullptr));
     if (d3d) FreeLibrary(d3d);
 
     const bool urlOk = serverUrl.rfind("ws://", 0) == 0 || serverUrl.rfind("wss://", 0) == 0;
-    std::printf("  Signaling URL configured         %s  (%s)\n", PassFail(urlOk), serverUrl.c_str());
+    Logger::Infof("Signaling URL configured: %s (%s)",
+                  PassFail(urlOk), Logger::RedactUrl(serverUrl).c_str());
     // With the built-in default this check always passes; it guards against
     // accidentally removing the production URL in a future refactor.
     if (!urlOk) {
-        std::fprintf(stderr, "\n[ERROR] Signaling URL is empty or invalid: '%s'\n",
-                     serverUrl.c_str());
+        Logger::Errorf("Signaling URL is empty or invalid: %s",
+                       Logger::RedactUrl(serverUrl).c_str());
         return false;
     }
     return true;
@@ -166,6 +212,7 @@ bool RunPreflight(const std::string& serverUrl) {
 
 struct HostApp {
     HostUI ui;
+    DesktopViewer viewer;
     CaptureEngine capture;
     EncoderEngine encoder;
     InputEngine input;
@@ -177,6 +224,7 @@ struct HostApp {
     std::string activeSessionId;
     std::atomic<bool> loggedFirstCapture{false};
     std::atomic<bool> loggedFirstEncode{false};
+    std::atomic<bool> shutdownStarted{false};
 
     void StartPipeline() {
         if (pipelineRunning.exchange(true)) return;
@@ -188,20 +236,21 @@ struct HostApp {
         cfg.maxBitrateKbps = 80000;
         if (!encoder.Initialize(capture.Device(), cfg)) {
             ui.SetStatusLine("Encoder init failed - is this an NVIDIA GPU?");
+            Logger::Error("NVENC encoder initialization failed; remote session cannot start");
             pipelineRunning = false;
             return;
         }
         encoder.SetOutputCallback([this](const EncodedFrame& f) {
             if (!loggedFirstEncode.exchange(true))
-                std::printf("[VIDEO] First frame encoded (%zu bytes, keyframe=%d)\n",
-                            f.size, f.keyframe ? 1 : 0);
+                Logger::Infof("First video frame encoded: %zu bytes, keyframe=%d",
+                              f.size, f.keyframe ? 1 : 0);
             perf.OnEncodeFrame(f.encodeDurationUs);
             rtc->SendFrame(f);
         });
         capture.Start(
             [this](ID3D11Texture2D* tex, int64_t captureUs) {
                 if (!loggedFirstCapture.exchange(true))
-                    std::printf("[VIDEO] First frame captured\n");
+                    Logger::Info("First desktop frame captured");
                 const int64_t t0 = NowUs();
                 if (!encoder.SubmitFrame(tex, captureUs)) {
                     perf.OnFrameDropped();
@@ -213,6 +262,7 @@ struct HostApp {
         input.Start();
         ui.OnSessionActive(true);
         ui.SetStatusLine("Remote session active");
+        Logger::Info("Remote session pipeline is active");
     }
 
     void StopPipeline(const std::string& reason) {
@@ -230,6 +280,19 @@ struct HostApp {
         activeSessionId.clear();
         ui.OnSessionActive(false);
         ui.SetStatusLine("Ready for connection");
+        Logger::Infof("Remote session stopped: %s", reason.c_str());
+    }
+
+    void Shutdown() {
+        if (shutdownStarted.exchange(true)) return;
+        Logger::Info("ReMCote Desktop is shutting down");
+        viewer.Close();
+        StopPipeline("Application closed");
+        if (registration) registration->Stop();
+        rtc.reset();
+        registration.reset();
+        Logger::Info("All host services stopped");
+        Logger::Shutdown();
     }
 };
 
@@ -245,11 +308,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
         return CiSelfTest();
     }
 
-    std::printf("[REMCOTE] Starting\n");
+    ComApartment comApartment;
+    if (!comApartment.Ready()) {
+        MessageBoxW(nullptr,
+                    L"ReMCote could not initialize Windows desktop services.\n\n"
+                    L"Close other copies of ReMCote and try again.",
+                    L"ReMCote Desktop",
+                    MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    auto app = std::make_unique<HostApp>();
+    Logger::Initialize(DefaultLogPath(), [&app](const std::string& line) {
+        app->ui.AppendLog(line);
+    });
+    Logger::Info("ReMCote Desktop starting");
 
     const SignalingConfig sig = ResolveSignaling();
-    std::printf("[SIGNALING] Server: %s\n", sig.url.c_str());
-    std::printf("[SIGNALING] Source: %s\n", sig.source);
+    Logger::Infof("Signaling server: %s", Logger::RedactUrl(sig.url).c_str());
+    Logger::Debugf("Signaling source: %s", sig.source);
 
     if (!RunPreflight(sig.url)) {
         // This should never fire with the built-in default, but protects
@@ -259,23 +336,41 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
                     L"If you are a developer, set REMCOTE_SIGNALING_URL to your server.\n"
                     L"Normal users: just double-click ReMCoteHost.exe — no configuration needed.",
                     L"ReMCote Host", MB_ICONERROR);
+        Logger::Shutdown();
         return 1;
     }
 
-    auto app = std::make_unique<HostApp>();
+    if (!app->ui.Create(hInstance)) {
+        Logger::Shutdown();
+        return 1;
+    }
+    app->ui.RefreshLogView();
+
+    app->ui.SetViewerRequest([&app, hInstance] {
+        app->viewer.Open(hInstance, L"https://remcote.replit.app/?desktop=1");
+    });
+    app->ui.SetStopSession([&app] { app->StopPipeline("Host stopped the session"); });
+    app->ui.SetExitRequest([&app] {
+        app->Shutdown();
+    });
+    app->ui.SetTelemetryProvider([&app] { return app->perf.Sample(); });
 
     if (!app->capture.Initialize()) {
-        std::printf("  DXGI Desktop Duplication         FAIL\n");
+        Logger::Warning("DXGI desktop duplication is unavailable; starting viewer-only mode");
+        app->ui.SetGpuInfo("Host unavailable", "Viewer ready");
+        app->ui.SetStatusLine("Viewer mode: connect to another device");
         MessageBoxW(nullptr,
-                    L"Failed to initialize screen capture (DXGI Desktop Duplication).\n"
-                    L"An NVIDIA GPU with a current driver is required.",
-                    L"ReMCote Host", MB_ICONERROR);
-        return 1;
+                    L"This computer cannot host a ReMCote session because screen capture is unavailable.\n\n"
+                    L"You can still use it to connect to another ReMCote device.",
+                    L"ReMCote Desktop", MB_ICONINFORMATION);
+        const int rc = app->ui.RunMessageLoop();
+        app->Shutdown();
+        return rc;
     }
-    std::printf("  DXGI Desktop Duplication         PASS\n");
-    std::printf("[GPU] %s\n", app->capture.GpuName().c_str());
-    std::printf("[CAPTURE] DXGI initialized (%dx%d @ %d Hz)\n",
-                app->capture.Width(), app->capture.Height(), app->capture.RefreshHz());
+    Logger::Info("DXGI desktop duplication initialized");
+    Logger::Infof("Capture GPU: %s", app->capture.GpuName().c_str());
+    Logger::Infof("Capture dimensions: %dx%d @ %d Hz",
+                  app->capture.Width(), app->capture.Height(), app->capture.RefreshHz());
 
     HostCapabilities caps;
     caps.h264 = true;
@@ -285,15 +380,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     caps.desktopHeight = app->capture.Height();
     caps.desktopHz = app->capture.RefreshHz();
 
-    if (!app->ui.Create(hInstance)) return 1;
     app->ui.SetGpuInfo(caps.gpuName, "NVENC Ready");
     app->ui.SetStatusLine("Connecting to ReMCote...");
 
-    std::printf("[SIGNALING] Connecting to %s\n", sig.url.c_str());
+    Logger::Infof("Opening signaling connection to %s", Logger::RedactUrl(sig.url).c_str());
     app->registration = std::make_unique<DeviceRegistration>(sig.url, caps);
 
     app->registration->SetOnRegistered(
-        [&app](const std::string& id, const std::vector<std::string>& iceServers) {
+        [&app](const std::string& id, const std::vector<IceServerCfg>& iceServers) {
             app->ui.SetDeviceId(id);
             app->ui.SetOnline(true);
             app->ui.SetStatusLine("Ready for connection");
@@ -310,20 +404,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
 
     app->registration->SetOnConnectRequest(
         [&app](const std::string& sessionId, const std::string& desc) {
-            std::printf("[SESSION] Request received (%s)\n", desc.c_str());
+            Logger::Info("Incoming remote-session request received");
             app->ui.ShowConnectionRequest(sessionId, desc);
         });
 
     app->ui.SetApprovalDecision([&app](const std::string& sessionId, bool accept) {
         app->registration->RespondToConnect(sessionId, accept);
         if (accept) {
-            std::printf("[SESSION] Host approved\n");
+            Logger::Info("Host approved the remote-session request");
             app->approved = true;
             app->activeSessionId = sessionId;
             app->ui.SetStatusLine("Negotiating direct connection...");
             app->StartPipeline();
         } else {
             app->ui.SetStatusLine("Ready for connection");
+            Logger::Info("Host declined the remote-session request");
         }
     });
 
@@ -331,7 +426,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
         [&app](const std::string& sessionId, const nlohmann::json& payload) {
             if (!app->approved || !app->rtc) return;
             if (sessionId != app->activeSessionId) {
-                std::fprintf(stderr, "[SESSION] Dropped signal for non-approved session\n");
+                Logger::Warning("Dropped signaling message for a non-approved session");
                 return;
             }
             app->rtc->HandlePeerSignal(sessionId, payload);
@@ -340,17 +435,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     app->registration->SetOnSessionEnded(
         [&app](const std::string&, const std::string& reason) { app->StopPipeline(reason); });
 
-    app->ui.SetStopSession([&app] { app->StopPipeline("Host stopped the session"); });
-    app->ui.SetExitRequest([&app] {
-        app->StopPipeline("Host closed ReMCote");
-        if (app->registration) app->registration->Stop();
-    });
-
-    app->ui.SetTelemetryProvider([&app] { return app->perf.Sample(); });
-
     app->registration->Start();
 
     const int rc = app->ui.RunMessageLoop();
-    app->StopPipeline("Host exited");
+    app->Shutdown();
     return rc;
 }
