@@ -48,7 +48,7 @@ private:
     struct Session {
         std::shared_ptr<rtc::PeerConnection> pc;
         std::shared_ptr<rtc::Track> videoTrack;
-        std::shared_ptr<rtc::RtcpSrReporter> srReporter;
+        std::shared_ptr<rtc::RtpPacketizationConfig> rtpConfig; // for timestamp updates
         std::shared_ptr<rtc::DataChannel> pointerCh;
         std::shared_ptr<rtc::DataChannel> reliableCh;
         bool trackOpen = false;
