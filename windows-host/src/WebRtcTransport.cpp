@@ -147,7 +147,7 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
             s->videoTrack = s->pc->addTrack(media);
             auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
                 kVideoSsrc, "remcote-video", kVideoPayloadType,
-                rtc::H264RtpPacketizer::defaultClockRate);
+                rtc::H264RtpPacketizer::ClockRate);
             s->rtpConfig = rtpConfig;
             auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
                 rtc::NalUnit::Separator::StartSequence, rtpConfig);

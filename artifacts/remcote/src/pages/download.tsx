@@ -1,14 +1,21 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Terminal, Cpu, ShieldCheck, Download, AlertTriangle, Code2 } from "lucide-react";
+import { ArrowLeft, Cpu, ShieldCheck, Download, Code2 } from "lucide-react";
 
-// Direct link to the stable "latest" GitHub Release asset — updated automatically
-// after every successful CI build. Never links to Actions artifacts.
-const RELEASE_ZIP_URL = "https://github.com/Waseemshehada/ReMCote/releases/download/latest/ReMCoteHost-Windows.zip";
+// Direct link to the stable "latest" GitHub Release installer — updated
+// automatically after every successful CI build.
+const SETUP_EXE_URL = "https://github.com/Waseemshehada/ReMCote/releases/download/latest/ReMCoteSetup.exe";
+const DEV_ZIP_URL = "https://github.com/Waseemshehada/ReMCote/releases/download/latest/ReMCoteHost-Windows.zip";
 const SOURCE_ZIP_URL = `${import.meta.env.BASE_URL}downloads/remcote-windows-host.zip`;
-// The exact signaling endpoint for THIS deployment of ReMCote.
-const SIGNALING_URL = `wss://${window.location.host}/api/ws`;
+
+const STEPS: Array<[string, string]> = [
+  ["Download ReMCote", "Click the button above to download ReMCoteSetup.exe."],
+  ["Install", "Run the installer. It sets everything up and launches ReMCote when done."],
+  ["Copy your Device ID", "ReMCote opens and shows a 9-digit Device ID — no configuration needed."],
+  ["Connect from another computer", "Open remcote.replit.app on the other computer and enter the ID."],
+  ["Click ALLOW", "Approve the connection on this PC and you're in."],
+];
 
 export default function DownloadPage() {
   return (
@@ -23,7 +30,7 @@ export default function DownloadPage() {
               <ArrowLeft size={18} />
             </Button>
           </Link>
-          <span className="font-bold text-lg text-foreground">ReMCote Host Setup</span>
+          <span className="font-bold text-lg text-foreground">Get ReMCote</span>
         </div>
       </header>
 
@@ -33,33 +40,49 @@ export default function DownloadPage() {
           {/* Hero */}
           <div className="space-y-4">
             <h1 className="text-4xl font-bold tracking-tight text-foreground">
-              Get and Run the Host
+              ReMCote for Windows
             </h1>
             <p className="text-lg text-muted-foreground max-w-2xl leading-relaxed">
-              Download the prebuilt Windows Host, point it at this server, and start sharing your desktop in minutes.
+              Install ReMCote on the PC you want to control. It connects automatically — no setup, no configuration.
             </p>
           </div>
 
           {/* Primary download card */}
-          <div className="bg-primary/10 border border-primary/30 rounded-2xl p-8 flex flex-col sm:flex-row gap-6 items-start sm:items-center">
+          <div className="bg-primary/10 border border-primary/30 rounded-2xl p-8 flex flex-col sm:flex-row gap-6 items-start sm:items-center" data-testid="card-download">
             <div className="flex-1 space-y-3">
               <div className="flex items-center gap-2">
                 <Download size={20} className="text-primary" />
-                <span className="text-sm font-semibold text-primary uppercase tracking-wider">Prebuilt · No compiler required</span>
+                <span className="text-sm font-semibold text-primary uppercase tracking-wider">Installer · Zero configuration</span>
               </div>
-              <h2 className="text-2xl font-bold text-foreground">ReMCote Host for Windows</h2>
+              <h2 className="text-2xl font-bold text-foreground">ReMCoteSetup.exe</h2>
               <div className="flex flex-wrap gap-2 text-xs">
-                {["Windows 10/11", "x64", "Prebuilt Host", "No compiler required"].map(tag => (
+                {["Windows 10/11", "x64", "One-click install", "Connects automatically"].map(tag => (
                   <span key={tag} className="px-2 py-0.5 rounded-full bg-white/10 text-muted-foreground border border-white/10">{tag}</span>
                 ))}
               </div>
             </div>
-            <Button asChild size="lg" className="font-bold text-base shrink-0 px-8 py-6">
-              <a href={RELEASE_ZIP_URL}>
+            <Button asChild size="lg" className="font-bold text-base shrink-0 px-8 py-6" data-testid="button-download-installer">
+              <a href={SETUP_EXE_URL}>
                 <Download size={18} className="mr-2" />
-                Download ReMCote Host for Windows
+                Download ReMCote for Windows
               </a>
             </Button>
+          </div>
+
+          {/* Setup steps */}
+          <div className="space-y-6">
+            <h2 className="text-2xl font-semibold text-foreground border-b border-white/10 pb-2">
+              How it works
+            </h2>
+            <div className="space-y-8 pl-4 border-l-2 border-white/10">
+              {STEPS.map(([title, desc], i) => (
+                <div className="relative" key={title}>
+                  <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">{i + 1}</div>
+                  <h3 className="text-lg font-medium text-foreground mb-2">{title}</h3>
+                  <p className="text-muted-foreground text-sm">{desc}</p>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Info cards */}
@@ -103,86 +126,33 @@ export default function DownloadPage() {
             </Card>
           </div>
 
-          {/* Setup steps */}
-          <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-foreground border-b border-white/10 pb-2">
-              Setup Instructions
-            </h2>
-
-            <div className="space-y-8 pl-4 border-l-2 border-white/10">
-
-              <div className="relative">
-                <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">1</div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Download &amp; extract</h3>
-                <p className="text-muted-foreground text-sm">
-                  Click the button above to download <code className="text-primary/80">ReMCoteHost-Windows.zip</code>, then extract it anywhere on your Windows PC.
-                </p>
-              </div>
-
-              <div className="relative">
-                <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">2</div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Point the Host at this server</h3>
-                <p className="text-muted-foreground text-sm mb-3">
-                  Open PowerShell inside the extracted folder and set the signaling URL for this ReMCote server:
-                </p>
-                <div className="bg-black/60 border border-white/5 rounded-md p-4 font-mono text-sm text-primary-foreground/80 flex items-center gap-3 overflow-x-auto">
-                  <Terminal size={16} className="text-muted-foreground shrink-0" />
-                  <code>{`$env:REMCOTE_SIGNALING_URL = "${SIGNALING_URL}"`}</code>
-                </div>
-              </div>
-
-              <div className="relative">
-                <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">3</div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Run &amp; Connect</h3>
-                <p className="text-muted-foreground text-sm mb-3">
-                  Start the host from the same PowerShell window. It runs a preflight check, registers with the server, and shows a 9-digit Device ID. Enter that ID on this website from another computer — the host will show an ALLOW prompt.
-                </p>
-                <div className="bg-black/60 border border-white/5 rounded-md p-4 font-mono text-sm text-primary-foreground/80 flex items-center gap-3">
-                  <Terminal size={16} className="text-muted-foreground" />
-                  <code>.\ReMCoteHost.exe</code>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Advanced: build from source */}
+          {/* Advanced: developers */}
           <details className="group border border-white/10 rounded-xl overflow-hidden">
             <summary className="flex items-center gap-3 px-6 py-4 cursor-pointer select-none bg-black/20 hover:bg-black/40 transition-colors">
               <Code2 size={18} className="text-muted-foreground" />
-              <span className="font-medium text-muted-foreground group-open:text-foreground transition-colors">Build from Source</span>
+              <span className="font-medium text-muted-foreground group-open:text-foreground transition-colors">For Developers</span>
               <span className="ml-auto text-xs text-muted-foreground">Advanced</span>
             </summary>
             <div className="px-6 py-5 space-y-4 text-sm text-muted-foreground bg-black/10">
               <p>
-                Download the C++ source, CMake files, and automated build script. Requires Visual Studio 2022 with the C++ Desktop Development workload, git, and an internet connection for vcpkg.
+                A plain ZIP of the compiled host (no installer) is published alongside every release for diagnostics, and the full C++ source is available for auditing or custom builds. Developers can override the signaling server with the <code className="text-primary/80">REMCOTE_SIGNALING_URL</code> environment variable or a <code className="text-primary/80">remcote-server.txt</code> file next to the exe.
               </p>
-              <Button asChild variant="outline" size="sm" className="font-semibold">
-                <a href={SOURCE_ZIP_URL} download>
-                  <Download size={14} className="mr-2" />
-                  Download Source ZIP
-                </a>
-              </Button>
-              <div className="bg-black/40 border border-white/5 rounded-md p-4 font-mono text-xs">
-                <div className="text-muted-foreground mb-1"># Extract the ZIP, then:</div>
-                <div>cd remcote-windows-host\windows-host; .\build-windows.ps1</div>
+              <div className="flex flex-wrap gap-3">
+                <Button asChild variant="outline" size="sm" className="font-semibold">
+                  <a href={DEV_ZIP_URL}>
+                    <Download size={14} className="mr-2" />
+                    Host ZIP (no installer)
+                  </a>
+                </Button>
+                <Button asChild variant="outline" size="sm" className="font-semibold">
+                  <a href={SOURCE_ZIP_URL} download>
+                    <Download size={14} className="mr-2" />
+                    Source ZIP
+                  </a>
+                </Button>
               </div>
-              <p className="text-xs">
-                Full build docs in <code className="text-primary/80">windows-host/docs/</code>. On startup the host logs every preflight check and session transition — run from PowerShell to see them, or find <code className="text-primary/80">remcote-host.log</code> next to the exe.
-              </p>
             </div>
           </details>
-
-          {/* Diagnostics note */}
-          <div className="bg-primary/10 border border-primary/20 rounded-xl p-6 flex gap-4 items-start">
-            <AlertTriangle className="text-primary shrink-0 mt-1" />
-            <div>
-              <h4 className="font-semibold text-primary mb-1">Diagnostics</h4>
-              <p className="text-sm text-muted-foreground">
-                On startup the host runs a preflight check (NVENC, Direct3D, DXGI capture, signaling URL) and logs every session state transition. Run it from PowerShell to see logs in the terminal, or find them in <code className="text-primary/80">remcote-host.log</code> next to the exe.
-              </p>
-            </div>
-          </div>
 
         </div>
       </main>

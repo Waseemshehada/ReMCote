@@ -1,50 +1,25 @@
-# ReMCote Windows Host — Pinned Dependency Versions
+# ReMCote Windows Host — pinned dependencies
 
-All build-time dependencies are pinned to specific commits/tags so that the
-same source commit always produces the same dependency tree.
+The CI build (`.github/workflows/build-windows-host.yml`) uses **Conan 2**
+with prebuilt ConanCenter binaries. vcpkg is no longer used in CI.
 
-## vcpkg (dependency manager)
+| Dependency | Version | Source |
+|---|---|---|
+| libdatachannel | **0.24.0** | ConanCenter (prebuilt Windows x64 MSVC static, media enabled) |
+| nlohmann_json | 3.11.3 | ConanCenter (header-only) |
+| nv-codec-headers | tag `n12.2.72.0` | git clone in CI (headers only) |
+| Runner | `windows-2022` | pinned — VS2022 / MSVC 194 |
+| Conan | `>=2.4,<3` | pip |
 
-| Property | Value |
-|----------|-------|
-| Tag      | `2025.04.09` |
-| Commit   | `ce613c41372b23b1f51333815feb3edd87ef8a8b` |
-| vcpkg.json `builtin-baseline` | `ce613c41372b23b1f51333815feb3edd87ef8a8b` |
+Conan profile settings that must match the prebuilt binaries:
+- `build_type=Release`, `arch=x86_64`, `compiler=msvc`, `compiler.version=194`
+- `compiler.cppstd=17` (dep package ID; our own code compiles as C++20)
+- `compiler.runtime=dynamic` (/MD) — the installer ships `vc_redist.x64.exe`
 
-The `builtin-baseline` in `vcpkg.json` locks the registry snapshot used for
-dependency resolution to the same commit as the pinned vcpkg clone.
+Media support: the ConanCenter libdatachannel package is built with media
+enabled (it depends on libsrtp) and propagates `RTC_ENABLE_MEDIA=1` to
+consumers via `package_info`. Do NOT define it manually.
 
-## nv-codec-headers (NVIDIA Video Codec SDK interface headers)
-
-| Property | Value |
-|----------|-------|
-| Tag      | `n12.2.72.0` |
-| Commit   | `c69278340ab1d5559c7d7bf0edf615dc33ddbba7` |
-| Source   | https://github.com/FFmpeg/nv-codec-headers |
-
-The NVIDIA driver ships `nvEncodeAPI64.dll`. Only the headers are needed at
-compile time; no `.lib` or SDK installer is required.
-
-## libdatachannel (WebRTC implementation)
-
-| Property | Value |
-|----------|-------|
-| Version  | `0.22.6` |
-| Resolved by | vcpkg baseline `ce613c41` |
-| vcpkg triplet | `x64-windows-static-md` |
-
-RTP/media support (`RTC_ENABLE_MEDIA`) is ON by default in libdatachannel
-0.22.6 and is always built. No vcpkg feature flag is required.
-
-## nlohmann-json (JSON parsing)
-
-Resolved by the same vcpkg baseline. Version tracks whatever 0.22.x-era
-vcpkg recommends. No API used that has been unstable across recent versions.
-
-## To upgrade a dependency
-
-1. Update the tag constant in `build-windows.ps1`.
-2. If upgrading vcpkg: update `builtin-baseline` in `vcpkg.json` to the new
-   vcpkg commit hash.
-3. Update this file.
-4. Run a local build to confirm no API breakage before pushing.
+Upgrading: change the version in `conanfile.txt`, verify a prebuilt Windows
+x64 binary exists on ConanCenter for the profile above, re-audit the
+libdatachannel API used in `src/WebRtcTransport.cpp`, and update this file.

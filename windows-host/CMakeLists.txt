@@ -5,20 +5,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT WIN32)
-  message(FATAL_ERROR "ReMCoteHost targets Windows x64 only. Build with build-windows.ps1 on Windows.")
+  message(FATAL_ERROR "ReMCoteHost targets Windows x64 only.")
 endif()
 
-# Dependencies via vcpkg (manifest mode — see vcpkg.json):
-#   libdatachannel — production WebRTC (peer connection, DTLS/SRTP, H264 packetization)
-#   nlohmann-json  — signaling / input message JSON
+# Dependencies via Conan 2 (see conanfile.txt):
+#   libdatachannel/0.24.0 — WebRTC (peer connection, DTLS/SRTP, H264 packetization).
+#     Media support is enabled in the ConanCenter package and RTC_ENABLE_MEDIA=1
+#     is propagated by the package itself — do NOT define it manually here.
+#   nlohmann_json — signaling / input message JSON
 find_package(LibDataChannel CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# NVIDIA Video Codec SDK (NVENC). Headers ship with the SDK; nvEncodeAPI is
-# loaded dynamically from the NVIDIA driver at runtime, so no SDK .lib is
-# required beyond the headers. Set NVCODEC_SDK_DIR or place the SDK under
-# third_party/nv-codec-headers.
-set(NVCODEC_SDK_DIR "" CACHE PATH "Path to NVIDIA Video Codec SDK (Interface dir with nvEncodeAPI.h)")
+# NVIDIA Video Codec SDK (NVENC). Headers only; nvEncodeAPI is loaded
+# dynamically from the NVIDIA driver at runtime, so no SDK .lib is required.
+set(NVCODEC_SDK_DIR "" CACHE PATH "Path to NVENC headers (dir containing ffnvcodec/nvEncodeAPI.h)")
 if(NVCODEC_SDK_DIR STREQUAL "")
   set(NVCODEC_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
 endif()
@@ -55,7 +55,6 @@ target_compile_definitions(ReMCoteHost PRIVATE
   UNICODE _UNICODE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
-  RTC_ENABLE_MEDIA=1
 )
 
 set_target_properties(ReMCoteHost PROPERTIES
