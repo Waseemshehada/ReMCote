@@ -197,7 +197,7 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-static void DrawText(HDC hdc, int x, int y, const std::wstring& s, COLORREF color, HFONT font) {
+static void RenderText(HDC hdc, int x, int y, const std::wstring& s, COLORREF color, HFONT font) {
     SelectObject(hdc, font);
     SetTextColor(hdc, color);
     SetBkMode(hdc, TRANSPARENT);
@@ -212,33 +212,33 @@ void HostUI::OnPaint(HDC hdc) {
     const COLORREF green = RGB(70, 200, 120);
     const COLORREF red = RGB(240, 90, 90);
 
-    DrawText(hdc, 30, 24, L"ReMCote", blue, fontBig_);
-    DrawText(hdc, 30, 78, L"THIS DEVICE", grey, fontBody_);
-    DrawText(hdc, 30, 104, Widen(deviceId_), white, fontId_);
+    RenderText(hdc, 30, 24, L"ReMCote", blue, fontBig_);
+    RenderText(hdc, 30, 78, L"THIS DEVICE", grey, fontBody_);
+    RenderText(hdc, 30, 104, Widen(deviceId_), white, fontId_);
 
-    DrawText(hdc, 30, 166, online_ ? L"\u25CF ONLINE" : L"\u25CF OFFLINE",
+    RenderText(hdc, 30, 166, online_ ? L"\u25CF ONLINE" : L"\u25CF OFFLINE",
              online_ ? green : red, fontBody_);
-    DrawText(hdc, 30, 192, Widen(status_), grey, fontBody_);
+    RenderText(hdc, 30, 192, Widen(status_), grey, fontBody_);
 
-    DrawText(hdc, 30, 236, L"GPU", grey, fontBody_);
-    DrawText(hdc, 90, 236, Widen(gpu_), white, fontBody_);
-    DrawText(hdc, 30, 262, L"Encoder", grey, fontBody_);
-    DrawText(hdc, 120, 262, Widen(encoder_), white, fontBody_);
+    RenderText(hdc, 30, 236, L"GPU", grey, fontBody_);
+    RenderText(hdc, 90, 236, Widen(gpu_), white, fontBody_);
+    RenderText(hdc, 30, 262, L"Encoder", grey, fontBody_);
+    RenderText(hdc, 120, 262, Widen(encoder_), white, fontBody_);
 
     if (requestPending_) {
-        DrawText(hdc, 30, 300, L"Incoming ReMCote Connection", white, fontBody_);
-        DrawText(hdc, 30, 324, L"Another computer is requesting access.", grey, fontBody_);
+        RenderText(hdc, 30, 300, L"Incoming ReMCote Connection", white, fontBody_);
+        RenderText(hdc, 30, 324, L"Another computer is requesting access.", grey, fontBody_);
     } else if (sessionActive_) {
         wchar_t buf[256];
         swprintf(buf, 256, L"Cap %.1fms  Enc %.1fms  %d/%d fps  drop %llu",
                  telemetry_.captureMs, telemetry_.encodeMs,
                  telemetry_.captureFps, telemetry_.encodeFps,
                  (unsigned long long)telemetry_.framesDropped);
-        DrawText(hdc, 30, 300, L"REMOTE SESSION ACTIVE", green, fontBody_);
-        DrawText(hdc, 30, 324, buf, grey, fontBody_);
+        RenderText(hdc, 30, 300, L"REMOTE SESSION ACTIVE", green, fontBody_);
+        RenderText(hdc, 30, 324, buf, grey, fontBody_);
     }
-    DrawText(hdc, 30, 424, L"CONNECT FROM THIS APP", grey, fontBody_);
-    DrawText(hdc, 30, 512, L"DIAGNOSTIC LOG", grey, fontBody_);
+    RenderText(hdc, 30, 424, L"CONNECT FROM THIS APP", grey, fontBody_);
+    RenderText(hdc, 30, 512, L"DIAGNOSTIC LOG", grey, fontBody_);
 }
 
 // --- thread-safe setters ---------------------------------------------------
