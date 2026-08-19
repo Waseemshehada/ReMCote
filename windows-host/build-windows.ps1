@@ -23,16 +23,21 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     $missing += "git — install from https://git-scm.com/download/win"
 }
 
-# Locate Visual Studio 2022 C++ tools via vswhere (ships with VS installer).
+# Locate Visual Studio (2022 or newer) C++ tools via vswhere (ships with VS installer).
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vsPath = $null
+$vsMajor = $null
 if (Test-Path $vswhere) {
-    $vsPath = & $vswhere -latest -products * `
+    $vsJson = & $vswhere -latest -products * -prerelease `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -version "[17.0,18.0)" -property installationPath
+        -version "[17.0,19.0)" -format json | ConvertFrom-Json
+    if ($vsJson) {
+        $vsPath = $vsJson[0].installationPath
+        $vsMajor = [int]($vsJson[0].installationVersion.Split('.')[0])
+    }
 }
 if (-not $vsPath) {
-    $missing += "Visual Studio 2022 with the 'Desktop development with C++' workload — install VS 2022 Community from https://visualstudio.microsoft.com/downloads/ and select that workload"
+    $missing += "Visual Studio 2022 (or newer) with the 'Desktop development with C++' workload — install VS Community from https://visualstudio.microsoft.com/downloads/ and select that workload"
 }
 
 # CMake: PATH, or the copy bundled with the VS C++ workload.
@@ -53,7 +58,10 @@ if ($missing.Count -gt 0) {
     Write-Host "Install the items above, open a NEW PowerShell window, and re-run .\build-windows.ps1"
     exit 1
 }
-Write-Host "Prerequisites OK (VS 2022: $vsPath)" -ForegroundColor Green
+Write-Host "Prerequisites OK (VS $vsMajor at: $vsPath)" -ForegroundColor Green
+
+# CMake generator matching the installed VS major version.
+$generator = if ($vsMajor -ge 18) { "Visual Studio 18 2026" } else { "Visual Studio 17 2022" }
 
 # --- 1. Bootstrap vcpkg (dependency manager, cloned locally) -----------------
 $VcpkgDir = Join-Path $Root "third_party\vcpkg"
@@ -77,7 +85,7 @@ if (-not (Test-Path $NvHeaders)) {
 # --- 3. Configure -------------------------------------------------------------
 $BuildDir = Join-Path $Root "build"
 & $cmake -S $Root -B $BuildDir `
-    -G "Visual Studio 17 2022" -A x64 `
+    -G $generator -A x64 `
     -DCMAKE_TOOLCHAIN_FILE="$VcpkgDir\scripts\buildsystems\vcpkg.cmake" `
     -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
     -DNVCODEC_SDK_DIR="$NvHeaders\include"
