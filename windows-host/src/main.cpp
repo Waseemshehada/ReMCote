@@ -154,11 +154,15 @@ static int CiSelfTest() {
         const HRESULT runtimeResult =
             GetAvailableCoreWebView2BrowserVersionString(nullptr, &webViewVersion);
         const bool runtimeAvailable = SUCCEEDED(runtimeResult) && webViewVersion != nullptr;
-        std::printf("[TEST] WebView2 Runtime            %s%s%s\n",
+        // Convert wide version string to narrow for printf (%s expects char*).
+        char verBuf[256] = {};
+        if (runtimeAvailable && webViewVersion)
+            WideCharToMultiByte(CP_UTF8, 0, webViewVersion, -1, verBuf, sizeof(verBuf), nullptr, nullptr);
+        std::printf("[TEST] WebView2 Runtime            %s%s%s%s\n",
                     runtimeAvailable ? "PASS" : "FAIL",
                     runtimeAvailable ? "  (" : "",
-                    runtimeAvailable ? webViewVersion : "");
-        if (runtimeAvailable) std::printf(")\n");
+                    runtimeAvailable ? verBuf : "",
+                    runtimeAvailable ? ")" : "");
         if (webViewVersion) CoTaskMemFree(webViewVersion);
         CoUninitialize();
         if (!runtimeAvailable) pass = false;
