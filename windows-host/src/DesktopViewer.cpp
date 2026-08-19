@@ -65,10 +65,15 @@ DesktopViewer::~DesktopViewer() {
     Close();
 }
 
-bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl) {
+bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl,
+                         const std::string& initialDeviceId) {
     if (hwnd_) {
         ShowWindow(hwnd_, SW_RESTORE);
         SetForegroundWindow(hwnd_);
+        if (!initialDeviceId.empty() && !videoVisible_) {
+            SetWindowTextW(deviceEdit_, Widen(initialDeviceId).c_str());
+            StartSession();
+        }
         return true;
     }
 
@@ -116,6 +121,10 @@ bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl) {
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
     SetForegroundWindow(hwnd_);
+    if (!initialDeviceId.empty()) {
+        SetWindowTextW(deviceEdit_, Widen(initialDeviceId).c_str());
+        StartSession();
+    }
     return true;
 }
 

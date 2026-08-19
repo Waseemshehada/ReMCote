@@ -349,8 +349,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
     }
     app->ui.RefreshLogView();
 
-    app->ui.SetViewerRequest([&app, hInstance, signalingUrl = sig.url] {
-        app->viewer.Open(hInstance, signalingUrl);
+    app->ui.SetViewerRequest([&app, hInstance, signalingUrl = sig.url](
+                                 const std::string& deviceId) {
+        app->viewer.Open(hInstance, signalingUrl, deviceId);
     });
     app->ui.SetStopSession([&app] { app->StopPipeline("Host stopped the session"); });
     app->ui.SetPeerDisconnected(
