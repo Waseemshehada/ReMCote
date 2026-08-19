@@ -23,27 +23,6 @@ if(NVCODEC_SDK_DIR STREQUAL "")
   set(NVCODEC_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
 endif()
 
-# WebView2 embedded viewer — temporarily disabled while the underlying MSVC
-# compile error in WebView2.h on the CI runner is investigated.
-# DesktopViewer.h/.cpp use a no-op stub for now; restore by re-enabling the
-# WebView2 SDK block below and linking WebView2LoaderStatic.lib.
-
-# Download WebView2 Runtime bootstrapper for the installer if not already present.
-# The installer still ships the Edge WebView2 runtime for the remote viewer web page.
-set(_wv2_bootstrapper "${CMAKE_CURRENT_SOURCE_DIR}/installer/MicrosoftEdgeWebview2Setup.exe")
-if(NOT EXISTS "${_wv2_bootstrapper}")
-  message(STATUS "Downloading WebView2 Runtime bootstrapper for installer...")
-  execute_process(
-    COMMAND powershell -NonInteractive -ExecutionPolicy Bypass -Command
-      "& { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2124703' -OutFile '${_wv2_bootstrapper}' -UseBasicParsing }"
-    RESULT_VARIABLE _wv2b_result
-    ERROR_VARIABLE  _wv2b_error
-  )
-  if(NOT _wv2b_result EQUAL 0)
-    message(WARNING "WebView2 Runtime bootstrapper download failed (${_wv2b_error}) — installer will not bundle it.")
-  endif()
-endif()
-
 add_executable(ReMCoteHost WIN32
   src/main.cpp
   src/DeviceRegistration.cpp
@@ -55,6 +34,10 @@ add_executable(ReMCoteHost WIN32
   src/HostUI.cpp
   src/Logger.cpp
   src/DesktopViewer.cpp
+  src/ViewerSignaling.cpp
+  src/ViewerTransport.cpp
+  src/H264Decoder.cpp
+  src/D3D11Renderer.cpp
 )
 
 target_include_directories(ReMCoteHost PRIVATE
@@ -72,6 +55,10 @@ target_link_libraries(ReMCoteHost PRIVATE
   gdi32
   shell32
   ole32
+  mf
+  mfplat
+  mfuuid
+  wmcodecdspuuid
 )
 
 target_compile_definitions(ReMCoteHost PRIVATE

@@ -4,8 +4,12 @@
 // never carries media (spec §7).
 
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,6 +17,7 @@
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
 
+#include "CallbackFence.h"
 #include "Common.h"
 
 namespace remcote {
@@ -48,6 +53,7 @@ private:
     void Connect();
     void HandleMessage(const std::string& text);
     void Send(const nlohmann::json& msg);
+    void FlushPendingMessages();
     void HeartbeatLoop();
 
     std::string serverUrl_;
@@ -56,8 +62,17 @@ private:
     std::string secretToken_;   // persisted so this device keeps its ID across restarts
     std::shared_ptr<rtc::WebSocket> ws_;
     std::thread heartbeatThread_;
+    std::condition_variable heartbeatCv_;
+    std::mutex heartbeatMutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
+    std::atomic<bool> registered_{false};
+    std::atomic<uint64_t> connectionGeneration_{0};
+    std::shared_ptr<CallbackFence> callbackFence_{
+        std::make_shared<CallbackFence>()};
+    std::mutex socketMutex_;
+    std::mutex sendMutex_;
+    std::deque<nlohmann::json> pendingMessages_;
 
     ConnectRequest onConnectRequest_;
     PeerSignal onPeerSignal_;

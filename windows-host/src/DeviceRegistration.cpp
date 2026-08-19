@@ -48,18 +48,47 @@ void DeviceRegistration::Start() {
 }
 
 void DeviceRegistration::Stop() {
-    running_ = false;
-    if (ws_) {
-        try { ws_->close(); } catch (...) {}
+    if (!running_.exchange(false)) {
+        callbackFence_->StopAccepting();
+        callbackFence_->WaitForIdle();
+        return;
     }
+    registered_ = false;
+    connected_ = false;
+    connectionGeneration_.fetch_add(1);
+    callbackFence_->StopAccepting();
+    heartbeatCv_.notify_all();
     if (heartbeatThread_.joinable()) heartbeatThread_.join();
+
+    // A stale onClosed callback may have been between its reconnect checks.
+    // Wait for it before taking the final socket snapshot.
+    callbackFence_->WaitForIdle();
+
+    std::shared_ptr<rtc::WebSocket> socket;
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        socket = std::move(ws_);
+    }
+    if (socket) {
+        try { socket->close(); } catch (...) {}
+    }
 }
 
 void DeviceRegistration::Connect() {
-    ws_ = std::make_shared<rtc::WebSocket>();
+    const uint64_t generation = connectionGeneration_.fetch_add(1) + 1;
+    auto socket = std::make_shared<rtc::WebSocket>();
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        ws_ = socket;
+    }
+    auto callbackFence = callbackFence_;
 
-    ws_->onOpen([this] {
+    socket->onOpen([this, generation, callbackFence] {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
+        if (connectionGeneration_.load() != generation) return;
         connected_ = true;
+        registered_ = false;
         Logger::Infof("Signaling socket connected: %s", Logger::RedactUrl(serverUrl_).c_str());
         json reg = {
             {"type", "host-register"},
@@ -81,22 +110,31 @@ void DeviceRegistration::Connect() {
         Send(reg);
     });
 
-    ws_->onMessage(
+    socket->onMessage(
         [](rtc::binary) {},  // ignore binary messages on the signaling socket
-        [this](rtc::string text) { HandleMessage(text); }
+        [this, generation, callbackFence](rtc::string text) {
+            auto lease = callbackFence->TryEnter();
+            if (!lease) return;
+            if (connectionGeneration_.load() == generation) HandleMessage(text);
+        }
     );
 
-    ws_->onClosed([this] {
+    socket->onClosed([this, generation, callbackFence] {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
+        if (connectionGeneration_.load() != generation) return;
         connected_ = false;
+        registered_ = false;
         Logger::Warning("Signaling socket closed; reconnecting in 2 seconds");
         if (running_) {
             std::this_thread::sleep_for(std::chrono::seconds(2));
-            if (running_) Connect(); // auto-reconnect keeps the device ONLINE
+            if (running_ && connectionGeneration_.load() == generation)
+                Connect(); // auto-reconnect keeps the device ONLINE
         }
     });
 
     try {
-        ws_->open(serverUrl_);
+        socket->open(serverUrl_);
     } catch (const std::exception& e) {
         Logger::Errorf("Signaling socket failed to open: %s", e.what());
     }
@@ -137,6 +175,8 @@ void DeviceRegistration::HandleMessage(const std::string& text) {
             });
         Logger::Infof("Device registration complete: %zu ICE server(s), TURN relay %s",
                       iceServers.size(), hasTurn ? "AVAILABLE" : "NOT configured");
+        registered_ = true;
+        FlushPendingMessages();
         if (onRegistered_) onRegistered_(publicDeviceId_, iceServers);
     } else if (type == "host-connect-request") {
         Logger::Info("Signaling server forwarded a connection request");
@@ -157,6 +197,9 @@ void DeviceRegistration::HandleMessage(const std::string& text) {
 
 void DeviceRegistration::RespondToConnect(const std::string& sessionId, bool accept) {
     Send({{"type", "host-connect-response"}, {"sessionId", sessionId}, {"accept", accept}});
+    Logger::Info(accept
+        ? "Host approval submitted to the signaling server"
+        : "Host rejection submitted to the signaling server");
 }
 
 void DeviceRegistration::SendSignal(const std::string& sessionId, const json& payload) {
@@ -168,19 +211,71 @@ void DeviceRegistration::NotifySessionClosed(const std::string& sessionId, const
 }
 
 void DeviceRegistration::Send(const json& msg) {
-    if (ws_ && connected_) {
+    if (!running_) return;
+    const std::string type = msg.value("type", "");
+    const bool isRegistration = type == "host-register";
+    const bool isHeartbeat = type == "host-heartbeat";
+    std::shared_ptr<rtc::WebSocket> socket;
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        socket = ws_;
+    }
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    if (socket && connected_ && (registered_ || isRegistration)) {
         try {
-            ws_->send(msg.dump());
+            socket->send(msg.dump());
+            return;
         } catch (const std::exception& e) {
             Logger::Errorf("Could not send signaling message: %s", e.what());
         }
     }
+    // Heartbeats are freshness probes and should never accumulate. Session
+    // control and SDP/ICE messages must survive a brief signaling reconnect.
+    if (!isHeartbeat && !isRegistration) {
+        const auto candidateIt = std::find_if(
+            pendingMessages_.begin(), pendingMessages_.end(),
+            [](const json& queued) {
+                return queued.value("type", "") == "host-signal" &&
+                    queued.contains("payload") &&
+                    queued["payload"].value("kind", "") == "candidate";
+            });
+        const bool incomingCandidate = type == "host-signal" &&
+            msg.contains("payload") &&
+            msg["payload"].value("kind", "") == "candidate";
+        if (pendingMessages_.size() >= 512 && candidateIt != pendingMessages_.end()) {
+            pendingMessages_.erase(candidateIt);
+        } else if (pendingMessages_.size() >= 512 && incomingCandidate) {
+            Logger::Warning("Dropped queued ICE candidate without dropping SDP/control");
+            return;
+        }
+        pendingMessages_.push_back(msg);
+        Logger::Warningf("Signaling unavailable; queued outbound %s message", type.c_str());
+    }
+}
+
+void DeviceRegistration::FlushPendingMessages() {
+    std::deque<json> pending;
+    {
+        std::lock_guard<std::mutex> lock(sendMutex_);
+        pending.swap(pendingMessages_);
+    }
+    if (pending.empty()) return;
+    Logger::Infof("Flushing %zu queued signaling message(s)", pending.size());
+    for (const auto& msg : pending) Send(msg);
 }
 
 void DeviceRegistration::HeartbeatLoop() {
+    std::unique_lock<std::mutex> lock(heartbeatMutex_);
     while (running_) {
-        std::this_thread::sleep_for(std::chrono::seconds(15));
+        if (heartbeatCv_.wait_for(
+                lock,
+                std::chrono::seconds(15),
+                [this] { return !running_.load(); })) {
+            break;
+        }
+        lock.unlock();
         if (connected_) Send({{"type", "host-heartbeat"}});
+        lock.lock();
     }
 }
 

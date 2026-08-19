@@ -12,19 +12,24 @@ import { WebSocketServer, WebSocket } from "ws";
 import { eq } from "drizzle-orm";
 import { db, devicesTable, sessionsTable } from "@workspace/db";
 import type {
+  ClientSessionStateMsg,
   ClientToServer,
   HostCapabilities,
   HostToServer,
   ServerToClient,
   ServerToHost,
   SessionState,
+  SignalPayload,
 } from "@workspace/remcote-protocol";
 import { logger } from "./logger";
 import { getIceServers } from "./ice";
 
 const SESSION_TTL_MS = 2 * 60 * 1000; // pending approval expires quickly (spec §40)
 const NEGOTIATION_TTL_MS = 30 * 1000; // approved-but-not-yet-connected window
+const CLIENT_RECONNECT_GRACE_MS = 30 * 1000;
+const HOST_RECONNECT_GRACE_MS = 30 * 1000;
 const HOST_TIMEOUT_MS = 45 * 1000;
+const MAX_PENDING_CLIENT_SIGNALS = 256;
 
 interface HostConn {
   ws: WebSocket;
@@ -38,8 +43,13 @@ interface LiveSession {
   sessionId: string;
   tokenHash: string;
   hostDeviceId: string;
-  clientWs: WebSocket;
+  clientWs: WebSocket | null;
   state: SessionState;
+  message: string;
+  hostCapabilities: HostCapabilities | null;
+  pendingClientSignals: SignalPayload[];
+  clientReconnectBy: number | null;
+  hostReconnectBy: number | null;
   /** Deadline for the current phase (approval, then negotiation). Once the
    * client reports the P2P link is established this is cleared to Infinity. */
   expiresAt: number;
@@ -62,14 +72,94 @@ function generateDeviceId(): string {
   return String(randomInt(100_000_000, 1_000_000_000));
 }
 
-function send(ws: WebSocket, msg: ServerToClient | ServerToHost) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+function send(ws: WebSocket, msg: ServerToClient | ServerToHost): boolean {
+  if (ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify(msg));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function bindClientSocket(session: LiveSession, ws: WebSocket) {
+  const previous = session.clientWs;
+  if (previous && previous !== ws) {
+    sessionsByClientWs.get(previous)?.delete(session.sessionId);
+  }
+  session.clientWs = ws;
+  session.clientReconnectBy = null;
+  let set = sessionsByClientWs.get(ws);
+  if (!set) sessionsByClientWs.set(ws, (set = new Set()));
+  set.add(session.sessionId);
+}
+
+function sessionStateMessage(session: LiveSession): ClientSessionStateMsg {
+  return {
+    type: "client-session-state",
+    sessionId: session.sessionId,
+    state: session.state,
+    message: session.message,
+    hostCapabilities: session.hostCapabilities ?? undefined,
+    iceServers: session.state === "NEGOTIATING" ? getIceServers() : undefined,
+  };
+}
+
+function sendSessionState(session: LiveSession): boolean {
+  return session.clientWs
+    ? send(session.clientWs, sessionStateMessage(session))
+    : false;
+}
+
+function queueClientSignal(session: LiveSession, payload: SignalPayload) {
+  if (session.pendingClientSignals.length >= MAX_PENDING_CLIENT_SIGNALS) {
+    // SDP offers/answers and end-of-candidates are control-plane boundaries.
+    // Only ordinary ICE candidates are safely disposable under pressure.
+    const candidateIndex = session.pendingClientSignals.findIndex(
+      (queued) => queued.kind === "candidate",
+    );
+    if (candidateIndex >= 0) {
+      session.pendingClientSignals.splice(candidateIndex, 1);
+    } else if (payload.kind === "candidate") {
+      logger.warn(
+        { sessionId: session.sessionId },
+        "[signaling] dropped queued ICE candidate without dropping SDP",
+      );
+      return;
+    } else {
+      logger.warn(
+        { sessionId: session.sessionId },
+        "[signaling] control signal queue exceeded its ICE budget",
+      );
+    }
+  }
+  session.pendingClientSignals.push(payload);
+}
+
+function persistSessionState(
+  sessionId: string,
+  state: "ACTIVE" | "DECLINED" | "ENDED",
+  endedReason?: string,
+) {
+  void db
+    .update(sessionsTable)
+    .set({ state, ...(endedReason ? { endedReason } : {}) })
+    .where(eq(sessionsTable.sessionId, sessionId))
+    .catch((err) =>
+      logger.error({ err, sessionId }, "[signaling] session persistence failed"),
+    );
 }
 
 export function getPresenceStats() {
   let active = 0;
   for (const s of sessionsById.values()) {
-    if (s.state === "NEGOTIATING" || s.state === "CONNECTED_DIRECT") active++;
+    if (
+      s.state === "NEGOTIATING" ||
+      s.state === "CONNECTED_DIRECT" ||
+      s.state === "CONNECTED_RELAY"
+    ) {
+      active++;
+    }
   }
   return { hostsOnline: hostsByDeviceId.size, activeSessions: active };
 }
@@ -145,6 +235,11 @@ async function handleHostRegister(
   if (stale && stale.ws !== ws) stale.ws.close();
   hostsByDeviceId.set(publicDeviceId, conn);
   hostsByWs.set(ws, conn);
+  for (const session of sessionsById.values()) {
+    if (session.hostDeviceId === publicDeviceId) {
+      session.hostReconnectBy = null;
+    }
+  }
 
   send(ws, {
     type: "host-registered",
@@ -176,23 +271,37 @@ async function handleHostMessage(ws: WebSocket, msg: HostToServer) {
     }
     case "host-connect-response": {
       const session = sessionsById.get(msg.sessionId);
-      if (!session || session.hostDeviceId !== host.publicDeviceId) return;
-      if (session.state !== "AWAITING_APPROVAL") return; // approve only once
+      if (!session || session.hostDeviceId !== host.publicDeviceId) {
+        logger.warn(
+          { sessionId: msg.sessionId, publicDeviceId: host.publicDeviceId },
+          "[signaling] ignored response for unknown session",
+        );
+        return;
+      }
+      if (session.state !== "AWAITING_APPROVAL") {
+        logger.warn(
+          { sessionId: msg.sessionId, state: session.state },
+          "[signaling] ignored duplicate host response",
+        );
+        return;
+      }
+      logger.info(
+        { sessionId: msg.sessionId, accepted: msg.accept },
+        "[signaling] host approval received",
+      );
       if (msg.accept) {
         session.state = "NEGOTIATING";
+        session.message = "Establishing direct connection";
         session.expiresAt = Date.now() + NEGOTIATION_TTL_MS;
-        await db
-          .update(sessionsTable)
-          .set({ state: "ACTIVE" })
-          .where(eq(sessionsTable.sessionId, msg.sessionId));
-        send(session.clientWs, {
-          type: "client-session-state",
-          sessionId: session.sessionId,
-          state: "NEGOTIATING",
-          message: "Establishing direct connection",
-          hostCapabilities: host.capabilities ?? undefined,
-          iceServers: getIceServers(),
-        });
+        session.hostReconnectBy = null;
+        persistSessionState(msg.sessionId, "ACTIVE");
+        const delivered = sendSessionState(session);
+        logger.info(
+          { sessionId: msg.sessionId, delivered },
+          delivered
+            ? "[signaling] negotiation state delivered to viewer"
+            : "[signaling] negotiation state retained for viewer reconnect",
+        );
       } else {
         await endSession(msg.sessionId, "FAILED", "The host declined the connection");
       }
@@ -203,11 +312,21 @@ async function handleHostMessage(ws: WebSocket, msg: HostToServer) {
       if (!session || session.hostDeviceId !== host.publicDeviceId) return;
       // Only relay signaling for an approved session (spec §4 consent boundary).
       if (session.state === "AWAITING_APPROVAL") return;
-      send(session.clientWs, {
+      const outgoing: ServerToClient = {
         type: "client-peer-signal",
         sessionId: session.sessionId,
         payload: msg.payload,
-      });
+      };
+      const delivered = session.clientWs
+        ? send(session.clientWs, outgoing)
+        : false;
+      if (!delivered) queueClientSignal(session, msg.payload);
+      logger.info(
+        { sessionId: msg.sessionId, kind: msg.payload.kind, delivered },
+        delivered
+          ? "[signaling] host peer signal relayed"
+          : "[signaling] host peer signal queued for viewer reconnect",
+      );
       break;
     }
     case "host-session-closed": {
@@ -263,12 +382,15 @@ async function handleClientConnectRequest(
     hostDeviceId: publicDeviceId,
     clientWs: ws,
     state: "AWAITING_APPROVAL",
+    message: "Waiting for the host to allow this connection",
+    hostCapabilities: host.capabilities,
+    pendingClientSignals: [],
+    clientReconnectBy: null,
+    hostReconnectBy: null,
     expiresAt,
   };
   sessionsById.set(sessionId, live);
-  let set = sessionsByClientWs.get(ws);
-  if (!set) sessionsByClientWs.set(ws, (set = new Set()));
-  set.add(sessionId);
+  bindClientSocket(live, ws);
 
   send(ws, {
     type: "client-session-state",
@@ -283,7 +405,10 @@ async function handleClientConnectRequest(
     sessionId,
     clientDescription: "A computer wants to connect",
   });
-  logger.info({ publicDeviceId, sessionId }, "[signaling] connect request");
+  logger.info(
+    { publicDeviceId, sessionId },
+    "[signaling] connect request delivered to host",
+  );
 }
 
 function authorizeClient(msg: { sessionId: string; sessionToken: string }, ws: WebSocket) {
@@ -299,19 +424,72 @@ async function handleClientMessage(ws: WebSocket, msg: ClientToServer) {
     case "client-connect-request":
       await handleClientConnectRequest(ws, msg);
       break;
+    case "client-resume-session": {
+      const session = sessionsById.get(msg.sessionId);
+      if (
+        !session ||
+        !safeEqualHex(session.tokenHash, sha256(msg.sessionToken))
+      ) {
+        send(ws, {
+          type: "error",
+          code: "SESSION_RESUME_FAILED",
+          message: "The remote session can no longer be resumed",
+        });
+        logger.warn(
+          { sessionId: msg.sessionId },
+          "[signaling] viewer session resume rejected",
+        );
+        return;
+      }
+      bindClientSocket(session, ws);
+      sendSessionState(session);
+      const queuedSignals = session.pendingClientSignals.splice(0);
+      for (const payload of queuedSignals) {
+        send(ws, {
+          type: "client-peer-signal",
+          sessionId: session.sessionId,
+          payload,
+        });
+      }
+      logger.info(
+        {
+          sessionId: session.sessionId,
+          state: session.state,
+          queuedSignals: queuedSignals.length,
+        },
+        "[signaling] viewer session resumed",
+      );
+      break;
+    }
     case "client-signal": {
       const session = authorizeClient(msg, ws);
-      if (!session) return;
+      if (!session) {
+        logger.warn(
+          { sessionId: msg.sessionId, kind: msg.payload.kind },
+          "[signaling] rejected unauthorized viewer signal",
+        );
+        return;
+      }
       // Consent boundary: no client signaling reaches the host until approved.
       if (session.state === "AWAITING_APPROVAL") return;
       const host = hostsByDeviceId.get(session.hostDeviceId);
-      if (!host) return;
+      if (!host) {
+        logger.warn(
+          { sessionId: msg.sessionId, kind: msg.payload.kind },
+          "[signaling] viewer signal could not reach offline host",
+        );
+        return;
+      }
       // Never infer "connected" from an SDP/ICE frame — the client reports it.
-      send(host.ws, {
+      const delivered = send(host.ws, {
         type: "host-peer-signal",
         sessionId: session.sessionId,
         payload: msg.payload,
       });
+      logger.info(
+        { sessionId: msg.sessionId, kind: msg.payload.kind, delivered },
+        "[signaling] viewer peer signal relayed",
+      );
       break;
     }
     case "client-session-established": {
@@ -319,11 +497,17 @@ async function handleClientMessage(ws: WebSocket, msg: ClientToServer) {
       if (!session) return;
       if (session.state !== "NEGOTIATING") return;
       session.state = msg.connectionType === "relay" ? "CONNECTED_RELAY" : "CONNECTED_DIRECT";
+      session.message =
+        msg.connectionType === "relay"
+          ? "Connected through relay"
+          : "Connected directly";
       session.expiresAt = Number.POSITIVE_INFINITY; // established; stop the timer
-      await db
-        .update(sessionsTable)
-        .set({ state: "ACTIVE" })
-        .where(eq(sessionsTable.sessionId, session.sessionId));
+      session.hostReconnectBy = null;
+      persistSessionState(session.sessionId, "ACTIVE");
+      logger.info(
+        { sessionId: session.sessionId, connectionType: msg.connectionType },
+        "[signaling] peer connection established",
+      );
       break;
     }
     case "client-session-closed": {
@@ -343,54 +527,71 @@ async function endSession(sessionId: string, state: SessionState, reason: string
   const session = sessionsById.get(sessionId);
   if (!session) return;
   sessionsById.delete(sessionId);
-  sessionsByClientWs.get(session.clientWs)?.delete(sessionId);
-
-  await db
-    .update(sessionsTable)
-    .set({ state: state === "FAILED" ? "DECLINED" : "ENDED", endedReason: reason })
-    .where(eq(sessionsTable.sessionId, sessionId));
-
-  send(session.clientWs, {
-    type: "client-session-state",
+  if (session.clientWs) {
+    sessionsByClientWs.get(session.clientWs)?.delete(sessionId);
+    send(session.clientWs, {
+      type: "client-session-state",
+      sessionId,
+      state,
+      message: reason,
+    });
+  }
+  persistSessionState(
     sessionId,
-    state,
-    message: reason,
-  });
+    state === "FAILED" ? "DECLINED" : "ENDED",
+    reason,
+  );
   const host = hostsByDeviceId.get(session.hostDeviceId);
   if (host) send(host.ws, { type: "host-session-ended", sessionId, reason });
+  logger.info({ sessionId, state, reason }, "[signaling] session ended");
 }
 
 async function handleDisconnect(ws: WebSocket) {
   const host = hostsByWs.get(ws);
   if (host) {
     hostsByWs.delete(ws);
-    if (hostsByDeviceId.get(host.publicDeviceId)?.ws === ws) {
+    const isCurrentConnection =
+      hostsByDeviceId.get(host.publicDeviceId)?.ws === ws;
+    if (isCurrentConnection) {
       hostsByDeviceId.delete(host.publicDeviceId);
-    }
-    await db
-      .update(devicesTable)
-      .set({ online: false, lastSeen: new Date() })
-      .where(eq(devicesTable.id, host.deviceRowId));
-    // Note: an established WebRTC session keeps running P2P even if the host's
-    // signaling socket drops (spec §32) — we only end *pending* negotiations.
-    for (const [id, s] of sessionsById) {
-      // Established P2P sessions survive a host signaling drop (spec §32);
-      // sessions still negotiating cannot proceed, so end them.
-      if (
-        s.hostDeviceId === host.publicDeviceId &&
-        (s.state === "AWAITING_APPROVAL" || s.state === "NEGOTIATING")
-      ) {
-        await endSession(id, "FAILED", "Host went offline before the session was established");
+      await db
+        .update(devicesTable)
+        .set({ online: false, lastSeen: new Date() })
+        .where(eq(devicesTable.id, host.deviceRowId));
+      // Keep pending sessions alive briefly while the Windows host reconnects.
+      // A superseded socket must not impose a deadline on its replacement.
+      const reconnectBy = Date.now() + HOST_RECONNECT_GRACE_MS;
+      for (const session of sessionsById.values()) {
+        if (
+          session.hostDeviceId === host.publicDeviceId &&
+          (session.state === "AWAITING_APPROVAL" || session.state === "NEGOTIATING")
+        ) {
+          session.hostReconnectBy = reconnectBy;
+        }
       }
     }
-    logger.info({ publicDeviceId: host.publicDeviceId }, "[signaling] host disconnected");
+    logger.info(
+      {
+        publicDeviceId: host.publicDeviceId,
+        stale: !isCurrentConnection,
+        reconnectGraceMs: HOST_RECONNECT_GRACE_MS,
+      },
+      "[signaling] host disconnected",
+    );
     return;
   }
   const owned = sessionsByClientWs.get(ws);
   if (owned) {
     sessionsByClientWs.delete(ws);
     for (const id of owned) {
-      await endSession(id, "DISCONNECTED", "Client disconnected");
+      const session = sessionsById.get(id);
+      if (!session || session.clientWs !== ws) continue;
+      session.clientWs = null;
+      session.clientReconnectBy = Date.now() + CLIENT_RECONNECT_GRACE_MS;
+      logger.info(
+        { sessionId: id, graceMs: CLIENT_RECONNECT_GRACE_MS },
+        "[signaling] viewer disconnected; awaiting resume",
+      );
     }
   }
 }
@@ -400,7 +601,19 @@ function startSweeper() {
   setInterval(() => {
     const now = Date.now();
     for (const [id, s] of sessionsById) {
-      if (s.state === "AWAITING_APPROVAL" && now > s.expiresAt) {
+      if (
+        !s.clientWs &&
+        s.clientReconnectBy !== null &&
+        now > s.clientReconnectBy
+      ) {
+        void endSession(id, "DISCONNECTED", "Viewer signaling connection was lost");
+      } else if (
+        s.hostReconnectBy !== null &&
+        now > s.hostReconnectBy &&
+        (s.state === "AWAITING_APPROVAL" || s.state === "NEGOTIATING")
+      ) {
+        void endSession(id, "FAILED", "Host signaling connection was lost");
+      } else if (s.state === "AWAITING_APPROVAL" && now > s.expiresAt) {
         void endSession(id, "FAILED", "Connection request timed out");
       } else if (s.state === "NEGOTIATING" && now > s.expiresAt) {
         void endSession(id, "FAILED", "Could not establish a direct connection");

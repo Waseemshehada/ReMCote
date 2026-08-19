@@ -1,6 +1,6 @@
-# Building ReMCote Host on Windows
+# Building ReMCote Desktop on Windows
 
-The Host is native Windows C++ and **must be built on Windows** — it cannot be
+ReMCote Desktop is native Windows C++ and **must be built on Windows** — it cannot be
 compiled in the Replit Linux environment. The source and an automated build
 script are provided; run the script on a Windows machine.
 
@@ -10,7 +10,9 @@ script are provided; run the script on a Windows machine.
   (MSVC v143 + Windows 10/11 SDK)
 - CMake 3.24+
 - Git
-- **NVIDIA GPU with a current driver** (NVENC). `nvEncodeAPI64.dll` ships with
+- Python 3.11+ (for Conan 2)
+- **NVIDIA GPU with a current driver** is required only to host (NVENC).
+  `nvEncodeAPI64.dll` ships with
   the driver and is loaded at runtime — no separate SDK install is required for
   the encoder library itself; only the interface headers are fetched.
 
@@ -21,10 +23,10 @@ cd windows-host
 .\build-windows.ps1 -Debug     # Debug
 ```
 The script:
-1. Bootstraps **vcpkg** into `third_party/vcpkg` and installs
-   `libdatachannel` and `nlohmann-json` (manifest mode via `vcpkg.json`).
+1. Installs **Conan 2** and resolves `libdatachannel` and `nlohmann-json`
+   from `conanfile.txt`.
 2. Fetches **nv-codec-headers** (NVENC interface) into `third_party/`.
-3. Configures with the VS 2022 generator + vcpkg toolchain.
+3. Configures with the VS 2022 generator + Conan toolchain.
 4. Builds and copies the exe to `dist\ReMCoteHost.exe`.
 
 ## Running
@@ -32,22 +34,21 @@ The script:
 $env:REMCOTE_SIGNALING_URL = "wss://<your-app>.replit.app/api/ws"
 .\dist\ReMCoteHost.exe
 ```
-There is no default server URL. If neither `REMCOTE_SIGNALING_URL` (or the
-legacy `REMCOTE_SERVER`) nor a `remcote-server.txt` file next to the exe
-provides one, the preflight fails with instructions. Launched from a terminal,
-logs print there; double-clicked, they go to `remcote-host.log` next to the exe.
+The production server URL is built in. `REMCOTE_SIGNALING_URL`, the legacy
+`REMCOTE_SERVER`, or `remcote-server.txt` can override it for developers.
 
-The window shows the Device ID (e.g. `583 491 276`), `● ONLINE`, GPU, and
-`NVENC Ready`. Enter that Device ID on the ReMCote website, then click **ALLOW**
-on the Host when the request appears.
+The window shows the Device ID and a **CONNECT TO ANOTHER DEVICE** button.
+Install the same executable on both PCs, enter the host's Device ID on the
+viewer PC, then click **ALLOW** on the host.
 
 ## Dependencies summary
 | Dependency | Source | Purpose |
 |------------|--------|---------|
-| libdatachannel | vcpkg | WebRTC peer, DTLS/SRTP, H264 RTP packetization |
-| nlohmann-json | vcpkg | Signaling / input JSON |
+| libdatachannel | ConanCenter | WebRTC peer, DTLS/SRTP, H264 RTP packetization |
+| nlohmann-json | ConanCenter | Signaling / input JSON |
 | nv-codec-headers | git (FFmpeg) | NVENC API headers |
 | Direct3D 11 / DXGI | Windows SDK | Desktop Duplication capture |
+| Media Foundation | Windows SDK/runtime | Native H.264 decoding |
 | user32 (SendInput) | Windows SDK | Input injection |
 
 ## Troubleshooting
@@ -55,4 +56,5 @@ on the Host when the request appears.
   an NVIDIA GPU.
 - **`DuplicateOutput failed`** — another Desktop Duplication client may hold the
   output, or you are on a headless/RDP session. Run on the physical console.
-- **vcpkg build slow the first time** — dependencies compile once and cache.
+- **Conan has no compatible binary** — confirm MSVC 2022 x64 Release and the
+  versions in `DEPENDENCIES.lock.md`; CI intentionally uses prebuilt packages.

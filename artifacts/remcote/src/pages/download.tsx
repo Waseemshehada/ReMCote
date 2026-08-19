@@ -11,10 +11,10 @@ const SOURCE_ZIP_URL = `${import.meta.env.BASE_URL}downloads/remcote-windows-hos
 
 const STEPS: Array<[string, string]> = [
   ["Download ReMCote", "Click the button above to download ReMCoteSetup.exe."],
-  ["Install", "Run the installer. It sets everything up and launches ReMCote when done."],
-  ["Copy your Device ID", "ReMCote opens and shows a 9-digit Device ID — no configuration needed."],
-  ["Connect from another computer", "Open remcote.replit.app on the other computer and enter the ID."],
-  ["Click ALLOW", "Approve the connection on this PC and you're in."],
+  ["Install on both computers", "Run the installer on the host PC and the viewer PC. Both computers use the same native Windows app."],
+  ["Copy the host Device ID", "Run ReMCote on the host PC and copy the 9-digit Device ID shown in its window."],
+  ["Connect from the viewer app", "On the other PC, open ReMCote, click CONNECT TO ANOTHER DEVICE, and enter the host Device ID. No browser is needed."],
+  ["Click ALLOW", "Approve the connection on the host PC. The viewer then receives the desktop and can send input."],
 ];
 
 export default function DownloadPage() {
@@ -43,7 +43,7 @@ export default function DownloadPage() {
               ReMCote for Windows
             </h1>
             <p className="text-lg text-muted-foreground max-w-2xl leading-relaxed">
-              Install ReMCote on the PC you want to control. It connects automatically — no setup, no configuration.
+              Install the same ReMCote app on both Windows PCs. One PC hosts the desktop and the other connects as the native viewer — no browser is needed.
             </p>
           </div>
 
@@ -52,11 +52,11 @@ export default function DownloadPage() {
             <div className="flex-1 space-y-3">
               <div className="flex items-center gap-2">
                 <Download size={20} className="text-primary" />
-                <span className="text-sm font-semibold text-primary uppercase tracking-wider">Installer · Zero configuration</span>
+                <span className="text-sm font-semibold text-primary uppercase tracking-wider">Native Windows installer</span>
               </div>
               <h2 className="text-2xl font-bold text-foreground">ReMCoteSetup.exe</h2>
               <div className="flex flex-wrap gap-2 text-xs">
-                {["Windows 10/11", "x64", "One-click install", "Connects automatically"].map(tag => (
+                {["Windows 10/11", "x64", "One-click install", "Same app on both PCs"].map(tag => (
                   <span key={tag} className="px-2 py-0.5 rounded-full bg-white/10 text-muted-foreground border border-white/10">{tag}</span>
                 ))}
               </div>

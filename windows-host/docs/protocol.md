@@ -1,18 +1,18 @@
 # ReMCote Signaling & Input Protocol
 
 The wire protocol is defined once in `lib/remcote-protocol/src/index.ts` and
-implemented identically by the browser (TypeScript) and the Windows host (C++).
+implemented by the native Windows viewer/host and the signaling server.
 Signaling is JSON over a WebSocket at **`/api/ws`**. Media/input are WebRTC.
 
 ## Roles
-- **Browser = offerer.** It creates the two data channels and a `recvonly`
+- **Native viewer = offerer.** It creates the two data channels and a `recvonly`
   video transceiver, then sends the SDP offer.
 - **Host = answerer.** It attaches its NVENC H.264 track (becomes `sendonly`)
   and answers.
 
 ## Session lifecycle
 ```
-Host                     Server                    Browser
+Host                     Server               Native viewer
  │  host-register ─────────►                         │
  │  ◄──── host-registered (publicDeviceId, secret, iceServers)
  │  host-heartbeat ────────► (every 15s)             │
@@ -37,9 +37,10 @@ See `lib/remcote-protocol` for exact TypeScript types. Summary:
 `host-signal`, `host-session-closed`.
 **Server → Host:** `host-registered`, `host-connect-request`, `host-peer-signal`,
 `host-session-ended`, `error`.
-**Browser → Server:** `client-connect-request`, `client-signal`,
+**Native viewer → Server:** `client-connect-request`, `client-signal`,
 `client-session-closed`.
-**Server → Browser:** `client-session-state`, `client-peer-signal`, `error`.
+**Server → Native viewer:** `client-session-state`, `client-peer-signal`,
+`error`.
 
 `SignalPayload` = `offer | answer | candidate | candidate-end`.
 
@@ -51,7 +52,7 @@ See `lib/remcote-protocol` for exact TypeScript types. Summary:
   (`remcote-device.json`) so the machine keeps its Device ID across restarts.
   The server stores only its SHA-256 hash.
 - `sessionToken` is short-lived (2-minute TTL for pending sessions), issued to
-  the browser, and required on every `client-signal`.
+  the native viewer, and required on every `client-signal`.
 
 ## Data channels
 - **`input-pointer`** — `ordered:false`, `maxRetransmits:0`. 9-byte binary:
