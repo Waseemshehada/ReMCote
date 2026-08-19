@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
