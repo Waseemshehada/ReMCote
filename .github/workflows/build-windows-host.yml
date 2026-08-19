@@ -53,11 +53,21 @@ jobs:
         run: |
           conan install . `
             --output-folder=conan `
-            --build=missing `
+            --build=never `
             -s build_type=Release `
             -s arch=x86_64 `
             -s compiler.cppstd=17
           if ($LASTEXITCODE -ne 0) { throw "conan install failed" }
+          if (-not (Test-Path "conan/conan_toolchain.cmake")) {
+            Write-Host "Conan output tree:"
+            if (Test-Path "conan") {
+              Get-ChildItem -Path conan -Recurse | Select-Object FullName
+            } else {
+              Write-Host "The conan output directory does not exist."
+            }
+            throw "conan/conan_toolchain.cmake not found after install"
+          }
+          Write-Host "Conan toolchain: $((Resolve-Path 'conan/conan_toolchain.cmake').Path)"
 
       - name: Print resolved package IDs
         run: conan graph info . -s build_type=Release -s arch=x86_64 -s compiler.cppstd=17 --format=text 2>$null | Select-String -Pattern "ref:|package_id:|binary:" | Select-Object -First 60
@@ -69,8 +79,9 @@ jobs:
 
       - name: CMake configure
         run: |
+          $toolchain = (Resolve-Path "conan\conan_toolchain.cmake").Path
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_TOOLCHAIN_FILE="conan/conan_toolchain.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
             -DCMAKE_BUILD_TYPE=Release
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
