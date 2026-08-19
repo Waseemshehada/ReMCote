@@ -513,6 +513,10 @@ LRESULT CALLBACK DesktopViewer::WindowProc(
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<DesktopViewer*>(create->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        // hwnd_ is assigned only after CreateWindowExW returns. Accept this
+        // creation message directly instead of forwarding it through a member
+        // handler that still has a null hwnd_.
+        return TRUE;
     }
     if (!self) return DefWindowProcW(hwnd, message, wParam, lParam);
     return self->HandleWindowMessage(message, wParam, lParam);
@@ -526,6 +530,8 @@ LRESULT CALLBACK DesktopViewer::VideoProc(
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<DesktopViewer*>(create->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        // videoSurface_ is likewise not assigned until creation completes.
+        return TRUE;
     }
     if (!self) return DefWindowProcW(hwnd, message, wParam, lParam);
     return self->HandleVideoMessage(message, wParam, lParam);
