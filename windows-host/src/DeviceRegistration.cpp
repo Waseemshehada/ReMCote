@@ -81,11 +81,10 @@ void DeviceRegistration::Connect() {
         Send(reg);
     });
 
-    ws_->onMessage([this](auto data) {
-        if (std::holds_alternative<rtc::string>(data)) {
-            HandleMessage(std::get<rtc::string>(data));
-        }
-    });
+    ws_->onMessage(
+        [](rtc::binary) {},  // ignore binary messages on the signaling socket
+        [this](rtc::string text) { HandleMessage(text); }
+    );
 
     ws_->onClosed([this] {
         connected_ = false;
