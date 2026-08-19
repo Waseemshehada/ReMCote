@@ -17,9 +17,11 @@ WebRtcTransport::WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> i
     Logger::Infof("WebRTC transport initialized with %zu ICE server(s)", iceServers_.size());
 }
 
+WebRtcTransport::~WebRtcTransport() { CloseAll(); }
+
 std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const std::string& sessionId) {
     rtc::Configuration config;
-    // The browser is the offerer. Wait until its offered video m-line has been
+    // The native viewer is the offerer. Wait until its video m-line has been
     // received and configured before creating our answer (see onTrack below).
     // Otherwise libdatachannel generates an answer without our H.264 SSRC.
     config.disableAutoNegotiation = true;
@@ -33,13 +35,19 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
 
     auto s = std::make_shared<Session>();
     s->pc = std::make_shared<rtc::PeerConnection>(config);
+    auto callbackFence = s->callbackFence;
+    std::weak_ptr<Session> weakSession = s;
 
-    s->pc->onLocalDescription([this, sessionId](rtc::Description desc) {
+    s->pc->onLocalDescription([this, sessionId, callbackFence](rtc::Description desc) {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
         Logger::Debugf("Generated local WebRTC %s description", desc.typeString().c_str());
         json payload = {{"kind", desc.typeString()}, {"sdp", std::string(desc)}};
         if (signalOut_) signalOut_(sessionId, payload);
     });
-    s->pc->onLocalCandidate([this, sessionId](rtc::Candidate cand) {
+    s->pc->onLocalCandidate([this, sessionId, callbackFence](rtc::Candidate cand) {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
         Logger::Debug("Generated a local ICE candidate");
         json payload = {
             {"kind", "candidate"},
@@ -48,7 +56,11 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
         };
         if (signalOut_) signalOut_(sessionId, payload);
     });
-    s->pc->onStateChange([this, sessionId](rtc::PeerConnection::State state) {
+    s->pc->onStateChange([this, weakSession, sessionId, callbackFence](rtc::PeerConnection::State state) {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
+        auto s = weakSession.lock();
+        if (!s) return;
         if (state == rtc::PeerConnection::State::Connected) {
             Logger::Info("WebRTC peer connected");
         }
@@ -56,20 +68,30 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
             state == rtc::PeerConnection::State::Failed ||
             state == rtc::PeerConnection::State::Closed) {
             Logger::Warning("WebRTC peer entered a terminal state");
-            if (sessionEnded_) sessionEnded_(sessionId);
+            if (!s->terminalNotified.exchange(true) && sessionEnded_) {
+                sessionEnded_(sessionId);
+            }
         }
     });
 
-    // The browser creates the data channels — we receive them.
-    s->pc->onDataChannel([this, s](std::shared_ptr<rtc::DataChannel> dc) {
+    // The native viewer creates the data channels — we receive them.
+    s->pc->onDataChannel([this, weakSession, callbackFence](std::shared_ptr<rtc::DataChannel> dc) {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
+        auto s = weakSession.lock();
+        if (!s) return;
         WireDataChannel(s, std::move(dc));
     });
 
     // libdatachannel creates a reciprocated local Track for every remote media
     // m-line when setRemoteDescription(offer) runs. Its description preserves
-    // the browser's codec payload types. Reuse that exact H.264 payload type:
+    // the viewer's codec payload types. Reuse that exact H.264 payload type:
     // a fixed PT is invalid because Chrome commonly assigns PT 96 to VP8.
-    s->pc->onTrack([this, s](std::shared_ptr<rtc::Track> offeredTrack) {
+    s->pc->onTrack([this, weakSession, callbackFence](std::shared_ptr<rtc::Track> offeredTrack) {
+        auto lease = callbackFence->TryEnter();
+        if (!lease) return;
+        auto s = weakSession.lock();
+        if (!s) return;
         rtc::Description::Media media = offeredTrack->description();
         if (media.type() != "video") return;
 
@@ -88,7 +110,7 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
         }
 
         if (h264PayloadType < 0) {
-            Logger::Error("Remote browser did not offer an H.264 video codec");
+            Logger::Error("Remote viewer did not offer an H.264 video codec");
             return;
         }
 
@@ -98,7 +120,7 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
             if (s->videoTrack) return; // ignore any renegotiated duplicate
 
             // `media` is already the reciprocated (sendonly) description for
-            // the browser's recvonly offer. Adding an SSRC makes it a valid
+            // the viewer's recvonly offer. Adding an SSRC makes it a valid
             // WebRTC sender in the answer.
             media.addSSRC(kVideoSsrc, "remcote-video");
             s->videoTrack = s->pc->addTrack(media);
@@ -110,12 +132,16 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
                 rtc::NalUnit::Separator::StartSequence, s->rtpConfig);
             packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
             s->videoTrack->setMediaHandler(packetizer);
-            s->videoTrack->onOpen([this, s] {
+            s->videoTrack->onOpen([this, weakSession, callbackFence] {
+                auto lease = callbackFence->TryEnter();
+                if (!lease) return;
+                auto s = weakSession.lock();
+                if (!s) return;
                 std::lock_guard<std::mutex> lock(mutex_);
                 s->trackOpen = true;
                 Logger::Info("WebRTC video track is active");
                 // The first IDR can be produced before SRTP opens. Force a
-                // fresh one now so the browser can decode immediately.
+                // fresh one now so the viewer can decode immediately.
                 if (keyframeRequest_) keyframeRequest_();
             });
 
@@ -142,17 +168,30 @@ void WebRtcTransport::WireDataChannel(const std::shared_ptr<Session>& s,
                                       std::shared_ptr<rtc::DataChannel> ch) {
     const std::string label = ch->label();
     Logger::Infof("WebRTC data channel opened: %s", label.c_str());
+    auto callbackFence = s->callbackFence;
     if (label == kPointerChannel) {
-        s->pointerCh = ch;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            s->pointerCh = ch;
+        }
         ch->onMessage(
-            [this](rtc::binary data) { HandlePointerBinary(data); },
+            [this, callbackFence](rtc::binary data) {
+                auto lease = callbackFence->TryEnter();
+                if (!lease) return;
+                HandlePointerBinary(data);
+            },
             [](rtc::string) {});
     } else if (label == kReliableChannel) {
-        s->reliableCh = ch;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            s->reliableCh = ch;
+        }
         std::weak_ptr<Session> weak = s;
         ch->onMessage(
             [](rtc::binary) {},
-            [this, weak](rtc::string text) {
+            [this, weak, callbackFence](rtc::string text) {
+                auto lease = callbackFence->TryEnter();
+                if (!lease) return;
                 if (auto locked = weak.lock()) HandleReliableMessage(locked, text);
             });
     }
@@ -233,7 +272,7 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
     if (kind == "offer") {
         Logger::Info("WebRTC offer received; creating answer");
         s->pc->setRemoteDescription(rtc::Description(payload.value("sdp", ""), "offer"));
-        // onTrack selects the browser's H.264 payload type, attaches our SSRC,
+        // onTrack selects the viewer's H.264 payload type, attaches our SSRC,
         // then explicitly generates the answer.
     } else if (kind == "candidate") {
         std::string cand = payload.value("candidate", "");
@@ -289,7 +328,10 @@ void WebRtcTransport::CloseSession(const std::string& sessionId) {
         s = it->second;
         sessions_.erase(it);
     }
-    if (s && s->pc) s->pc->close();
+    if (!s) return;
+    s->callbackFence->StopAccepting();
+    if (s->pc) s->pc->close();
+    s->callbackFence->WaitForIdle();
 }
 
 void WebRtcTransport::CloseAll() {
@@ -299,7 +341,13 @@ void WebRtcTransport::CloseAll() {
         copy.swap(sessions_);
     }
     for (auto& [id, s] : copy) {
+        s->callbackFence->StopAccepting();
+    }
+    for (auto& [id, s] : copy) {
         if (s->pc) s->pc->close();
+    }
+    for (auto& [id, s] : copy) {
+        s->callbackFence->WaitForIdle();
     }
 }
 

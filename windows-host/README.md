@@ -1,16 +1,17 @@
-# ReMCote Host (Windows)
+# ReMCote Desktop (Windows)
 
-Native Windows C++ host for ReMCote — an **attended** ultra-low-latency remote
-desktop. Captures the desktop with DXGI Desktop Duplication, encodes with NVENC
-H.264, and streams to a browser over WebRTC P2P. Remote mouse/keyboard input is
-injected with SendInput. **Every session requires the Host user to click ALLOW.**
+Native Windows C++ remote desktop for both computers. The same installation can
+share this PC or connect to another Device ID. Video and input travel peer to
+peer over WebRTC; the viewer decodes H.264 with Windows Media Foundation and
+presents it with D3D11. **Every session requires the Host user to click ALLOW.**
 
 ## Requirements
 
 - Windows 10 or 11, 64-bit
-- NVIDIA GPU with a current driver (NVENC)
+- NVIDIA GPU with a current driver is required only on a PC that shares its screen
+- A viewer-only PC needs Windows 10/11 with Media Foundation and D3D11
 - Visual Studio 2022 (any edition) with the **Desktop development with C++** workload
-- git
+- Git and Python 3.11+ (build only)
 
 ## Build
 
@@ -19,9 +20,8 @@ cd windows-host
 .\build-windows.ps1
 ```
 
-The script checks prerequisites (and tells you exactly what is missing),
-bootstraps vcpkg, fetches NVENC headers, configures with CMake, and builds
-Release x64. The result is:
+The script checks prerequisites, resolves the pinned Conan 2 dependencies,
+fetches NVENC headers, configures CMake, and builds Release x64. The result is:
 
 ```
 windows-host\dist\ReMCoteHost.exe
@@ -29,8 +29,8 @@ windows-host\dist\ReMCoteHost.exe
 
 ## Configure the signaling server
 
-The Host has **no built-in server URL**. Point it at your ReMCote server using
-either of the following (checked in this order):
+The app uses the production ReMCote signaling server by default. Developers can
+override it using either of the following (checked in this order):
 
 1. Environment variable:
    ```powershell
@@ -50,10 +50,9 @@ cd windows-host\dist
 - Launched from a terminal, logs print to that terminal.
 - Double-clicked, logs are written to `remcote-host.log` next to the exe.
 
-Startup runs a real preflight (Windows version, NVENC, D3D11, DXGI capture,
-signaling URL) with PASS/FAIL lines, then registers and shows a 9-digit
-Device ID in the Host window. Enter that ID on the ReMCote website from
-another computer; the Host window shows an ALLOW / DECLINE prompt.
+Install and run the same executable on both computers. On the viewer PC click
+**CONNECT TO ANOTHER DEVICE**, enter the 9-digit Device ID shown on the host,
+then click **ALLOW** on the host. No browser is used.
 
 ## First-frame diagnostics
 

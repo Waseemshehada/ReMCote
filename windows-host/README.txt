@@ -1,13 +1,15 @@
-ReMCote Windows Host
-====================
+ReMCote Desktop for Windows
+===========================
 
-1. Run ReMCoteHost.exe
-2. Copy the 9-digit Device ID shown in the window
-3. Open https://remcote.replit.app on the other PC
-4. Enter the Device ID
-5. Click ALLOW on this PC
+Install and run the same program on both computers.
 
-Requirements: Windows 10/11 x64, NVIDIA GPU (RTX recommended)
+1. On the host PC, copy the 9-digit Device ID.
+2. On the viewer PC, click CONNECT TO ANOTHER DEVICE.
+3. Enter the host's Device ID and click CONNECT.
+4. Click ALLOW on the host PC.
+
+No browser is required. The host PC needs an NVIDIA GPU for NVENC.
+A viewer-only PC needs Windows 10/11 x64.
 
 Logs appear in the terminal if you run from PowerShell,
 or in remcote-host.log next to the exe when double-clicked.

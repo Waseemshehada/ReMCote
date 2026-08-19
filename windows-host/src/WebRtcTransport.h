@@ -1,6 +1,6 @@
 #pragma once
-// WebRTC transport via libdatachannel. The host is the ANSWERER: the browser
-// creates the offer, the two input data channels, and a recvonly video
+// WebRTC transport via libdatachannel. The host is the ANSWERER: the native
+// viewer creates the offer, the two input data channels, and a recvonly video
 // transceiver. We attach our NVENC H.264 track and answer.
 
 #include <atomic>
@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Common.h"
+#include "CallbackFence.h"
 #include "InputEngine.h"
 
 namespace remcote {
@@ -27,6 +28,7 @@ public:
     using SessionEnded = std::function<void(const std::string& sessionId)>;
 
     WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> iceServers);
+    ~WebRtcTransport();
 
     void SetSignalOut(SignalOut cb) { signalOut_ = std::move(cb); }
     void SetBitrateRequest(BitrateRequest cb) { bitrateRequest_ = std::move(cb); }
@@ -53,6 +55,9 @@ private:
         std::shared_ptr<rtc::DataChannel> reliableCh;
         bool trackOpen = false;
         bool answerStarted = false;
+        std::atomic<bool> terminalNotified{false};
+        std::shared_ptr<CallbackFence> callbackFence{
+            std::make_shared<CallbackFence>()};
     };
 
     std::shared_ptr<Session> CreateSession(const std::string& sessionId);

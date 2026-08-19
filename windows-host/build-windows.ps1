@@ -1,66 +1,51 @@
-# ReMCote Host — reproducible Windows x64 build
+# ReMCote Desktop — reproducible Windows x64 build.
 #
 # Usage:
-#   .\build-windows.ps1              # release build -> dist\ReMCoteHost.exe
-#   .\build-windows.ps1 -Debug       # debug build
+#   .\build-windows.ps1
+#   .\build-windows.ps1 -Debug
 #
-# Pinned dependency versions (matches DEPENDENCIES.lock.md):
-#   vcpkg           tag 2025.04.09   commit ce613c41
-#   nv-codec-headers tag n12.2.72.0  commit c69278340
-#   libdatachannel  0.22.6           (resolved by pinned vcpkg baseline)
-#
-# Version enforcement: marker files (.remcote-pinned-tag) are written into
-# each cloned dependency directory. If the marker is absent or stale, the
-# directory is deleted and the correct version is re-cloned. This detects
-# any cached wrong-version dependency automatically, even under GitHub
-# Actions cache partial-key restoration.
+# The dependency source of truth is conanfile.txt / DEPENDENCIES.lock.md.
+# WebView2 is intentionally not installed: the viewer is native Win32,
+# Media Foundation, D3D11, and libdatachannel.
+
 param([switch]$Debug)
 $ErrorActionPreference = "Stop"
 
-$Root   = $PSScriptRoot
+$Root = $PSScriptRoot
 $Config = if ($Debug) { "Debug" } else { "Release" }
-
-# ── Pinned revisions ─────────────────────────────────────────────────────────
-# Change these ONLY when intentionally upgrading (update DEPENDENCIES.lock.md too).
-$VcpkgTag     = "2025.04.09"
 $NvHeadersTag = "n12.2.72.0"
-$WebView2Version = "1.0.2792.45"
 
-Write-Host "== ReMCote Host build ($Config) ==" -ForegroundColor Cyan
-Write-Host "   vcpkg tag       : $VcpkgTag"
-Write-Host "   nv-codec tag    : $NvHeadersTag"
-Write-Host "   WebView2 SDK    : $WebView2Version"
-Write-Host ""
+Write-Host "== ReMCote Desktop build ($Config) ==" -ForegroundColor Cyan
+Write-Host "   Conan packages : conanfile.txt"
+Write-Host "   NVENC headers  : $NvHeadersTag"
 
-# ── 0. Prerequisites check ───────────────────────────────────────────────────
 $missing = @()
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    $missing += "git — https://git-scm.com/download/win"
+foreach ($tool in @("git", "python")) {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+        $missing += $tool
+    }
 }
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vsPath  = $null; $vsMajor = $null
+$vsPath = $null
 if (Test-Path $vswhere) {
-    $vsJson = & $vswhere -latest -products * -prerelease `
+    $vsJson = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -version "[17.0,19.0)" -format json | ConvertFrom-Json
-    if ($vsJson) {
-        $vsPath  = $vsJson[0].installationPath
-        $vsMajor = [int]($vsJson[0].installationVersion.Split('.')[0])
-    }
+        -version "[17.0,18.0)" -format json | ConvertFrom-Json
+    if ($vsJson) { $vsPath = $vsJson[0].installationPath }
 }
 if (-not $vsPath) {
-    $missing += "Visual Studio 2022 with 'Desktop development with C++' workload"
+    $missing += "Visual Studio 2022 with Desktop development with C++"
 }
 
-$cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
+$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+$cmake = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
 if (-not $cmake -and $vsPath) {
-    $vsCmake = Join-Path $vsPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-    if (Test-Path $vsCmake) { $cmake = $vsCmake }
+    $bundledCmake = Join-Path $vsPath `
+        "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if (Test-Path $bundledCmake) { $cmake = $bundledCmake }
 }
-if (-not $cmake) {
-    $missing += "CMake 3.24+ — or add 'C++ CMake tools' component in VS installer"
-}
+if (-not $cmake) { $missing += "CMake 3.24+" }
 
 if ($missing.Count -gt 0) {
     Write-Host "Missing prerequisites:" -ForegroundColor Red
@@ -68,103 +53,61 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-# Toolchain diagnostics
-Write-Host "Toolchain:" -ForegroundColor Cyan
-Write-Host "  Visual Studio $vsMajor  at: $vsPath"
-Write-Host "  CMake: $(& $cmake --version | Select-Object -First 1)"
-$generator = if ($vsMajor -ge 18) { "Visual Studio 18 2026" } else { "Visual Studio 17 2022" }
-Write-Host "  Generator: $generator"
-Write-Host ""
+Write-Host "Installing Conan 2..." -ForegroundColor Cyan
+python -m pip install "conan>=2.4,<3"
+if ($LASTEXITCODE -ne 0) { throw "Conan installation failed" }
+conan profile detect --force
+if ($LASTEXITCODE -ne 0) { throw "Conan profile detection failed" }
 
-# ── Helper: ensure a directory is cloned at the correct pinned tag ────────────
-# Uses a .remcote-pinned-tag marker file to detect stale cached checkouts.
-function Ensure-PinnedClone {
-    param([string]$Dir, [string]$Tag, [string]$Url, [string]$Label)
-    $marker = Join-Path $Dir ".remcote-pinned-tag"
-    $cachedTag = if (Test-Path $marker) { (Get-Content $marker).Trim() } else { "" }
-    if ((Test-Path (Join-Path $Dir ".git")) -and $cachedTag -eq $Tag) {
-        Write-Host "${Label}: CACHE HIT (pinned $Tag)" -ForegroundColor Green
-        return
-    }
-    if ($cachedTag -ne "" -and $cachedTag -ne $Tag) {
-        Write-Host "${Label}: version mismatch (cached=$cachedTag, need=$Tag) — recloning" -ForegroundColor Yellow
-    } else {
-        Write-Host "${Label}: CACHE MISS — cloning $Tag" -ForegroundColor Yellow
-    }
-    if (Test-Path $Dir) {
-        # Use cmd rmdir — more reliable than Remove-Item for git repos
-        # because it handles read-only files that git sets on Windows.
-        Write-Host "  Removing old $Label directory..."
-        cmd /c "rmdir /s /q `"$Dir`""
-        if (Test-Path $Dir) { throw "Could not remove old $Label directory: $Dir" }
-    }
-    $parent = Split-Path $Dir
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    git clone --depth 1 --branch $Tag $Url $Dir
-    if ($LASTEXITCODE -ne 0) { throw "$Label clone failed" }
-    Set-Content $marker $Tag
-}
+$ConanDir = Join-Path $Root "conan"
+conan install $Root `
+    --output-folder=$ConanDir `
+    --build=missing `
+    -s build_type=$Config `
+    -s arch=x86_64 `
+    -s compiler.cppstd=17
+if ($LASTEXITCODE -ne 0) { throw "Conan dependency resolution failed" }
 
-# ── 1. vcpkg ─────────────────────────────────────────────────────────────────
-$VcpkgDir = Join-Path $Root "third_party\vcpkg"
-Ensure-PinnedClone -Dir $VcpkgDir -Tag $VcpkgTag `
-    -Url "https://github.com/microsoft/vcpkg" -Label "vcpkg"
+$toolchain = Get-ChildItem -Path $ConanDir -Recurse `
+    -Filter conan_toolchain.cmake | Select-Object -First 1
+if (-not $toolchain) { throw "conan_toolchain.cmake not found" }
 
-if (-not (Test-Path (Join-Path $VcpkgDir "vcpkg.exe"))) {
-    Write-Host "Bootstrapping vcpkg..."
-    & (Join-Path $VcpkgDir "bootstrap-vcpkg.bat") -disableMetrics
-    if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+$thirdParty = Join-Path $Root "third_party"
+$nvHeaders = Join-Path $thirdParty "nv-codec-headers"
+$nvTagFile = Join-Path $nvHeaders ".remcote-pinned-tag"
+$cachedTag = if (Test-Path $nvTagFile) {
+    (Get-Content $nvTagFile).Trim()
 } else {
-    Write-Host "vcpkg already bootstrapped"
+    ""
+}
+if (-not (Test-Path (Join-Path $nvHeaders ".git")) -or
+    $cachedTag -ne $NvHeadersTag) {
+    if (Test-Path $nvHeaders) {
+        cmd /c "rmdir /s /q `"$nvHeaders`""
+    }
+    New-Item -ItemType Directory -Force -Path $thirdParty | Out-Null
+    git clone --depth 1 --branch $NvHeadersTag `
+        https://github.com/FFmpeg/nv-codec-headers $nvHeaders
+    if ($LASTEXITCODE -ne 0) { throw "nv-codec-headers clone failed" }
+    Set-Content $nvTagFile $NvHeadersTag
 }
 
-# ── 2. NVENC headers ─────────────────────────────────────────────────────────
-$NvHeaders = Join-Path $Root "third_party\nv-codec-headers"
-Ensure-PinnedClone -Dir $NvHeaders -Tag $NvHeadersTag `
-    -Url "https://github.com/FFmpeg/nv-codec-headers" -Label "nv-codec-headers"
-
-# ── 3. WebView2 SDK ───────────────────────────────────────────────────────────
-$WebView2Dir = Join-Path $Root "third_party\webview2"
-$WebView2Header = Join-Path $WebView2Dir "build\native\include\WebView2.h"
-if (-not (Test-Path $WebView2Header)) {
-    Write-Host "WebView2 SDK: CACHE MISS — downloading $WebView2Version" -ForegroundColor Yellow
-    if (Test-Path $WebView2Dir) { Remove-Item -Recurse -Force $WebView2Dir }
-    $package = Join-Path $Root "third_party\webview2.zip"
-    Invoke-WebRequest `
-        -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$WebView2Version/microsoft.web.webview2.$WebView2Version.nupkg" `
-        -OutFile $package
-    Expand-Archive -Path $package -DestinationPath $WebView2Dir -Force
-    Remove-Item $package -Force
-}
-if (-not (Test-Path $WebView2Header)) { throw "WebView2 SDK headers were not extracted" }
-Write-Host "WebView2 SDK: READY" -ForegroundColor Green
-
-# ── 4. CMake configure ───────────────────────────────────────────────────────
 $BuildDir = Join-Path $Root "build"
-Write-Host ""
-Write-Host "Configuring..." -ForegroundColor Cyan
 & $cmake -S $Root -B $BuildDir `
-    -G $generator -A x64 `
-    -DCMAKE_TOOLCHAIN_FILE="$VcpkgDir\scripts\buildsystems\vcpkg.cmake" `
-    -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
-    -DNVCODEC_SDK_DIR="$NvHeaders\include" `
-    -DWEBVIEW2_SDK_DIR="$WebView2Dir"
+    -G "Visual Studio 17 2022" -A x64 `
+    -DCMAKE_TOOLCHAIN_FILE="$($toolchain.FullName)" `
+    -DCMAKE_BUILD_TYPE=$Config `
+    -DNVCODEC_SDK_DIR="$nvHeaders\include"
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
-# ── 5. Compile ───────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "Compiling..." -ForegroundColor Cyan
 & $cmake --build $BuildDir --config $Config --parallel
 if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
 
-# ── 6. Package ───────────────────────────────────────────────────────────────
 $Dist = Join-Path $Root "dist"
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
-Copy-Item (Join-Path $BuildDir "bin\$Config\ReMCoteHost.exe") (Join-Path $Dist "ReMCoteHost.exe") -Force
+Copy-Item `
+    (Join-Path $BuildDir "bin\$Config\ReMCoteHost.exe") `
+    (Join-Path $Dist "ReMCoteHost.exe") -Force
 
-Write-Host ""
-Write-Host "Build complete." -ForegroundColor Green
-Write-Host "EXE: $Dist\ReMCoteHost.exe"
-Write-Host ""
-Write-Host "Run: cd $Dist; .\ReMCoteHost.exe"
-Write-Host "(Connects to remcote.replit.app by default — no configuration needed.)"
+Write-Host "Build complete: $Dist\ReMCoteHost.exe" -ForegroundColor Green
+Write-Host "Install the same program on both PCs; no browser is required."

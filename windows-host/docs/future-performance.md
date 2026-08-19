@@ -6,21 +6,25 @@ so they can be added without a rewrite.
 
 ## Resolution & refresh
 - 4K60 / 4K120: NVENC handles it; the limiters are bitrate, network, and the
-  browser decoder. Add multi-slice encoding to parallelize decode.
+  native Media Foundation decoder. Add multi-slice encoding to parallelize
+  decode.
 - High-refresh pacing: pace encode submission to the source display's refresh
   and to client `framesDecoded` feedback to avoid over-producing.
 
 ## Codecs (encoder abstraction already in place)
-- **HEVC** — big bitrate savings at 4K; gate on browser support detection.
-- **AV1** — RTX 40-series NVENC AV1; best efficiency, narrower browser support.
-- Negotiate codec from `HostCapabilities` + browser `RTCRtpReceiver.getCapabilities`.
+- **HEVC** — big bitrate savings at 4K; gate on native decoder capability.
+- **AV1** — RTX 40-series NVENC AV1; best efficiency, narrower Windows decoder
+  availability.
+- Negotiate codecs from `HostCapabilities` plus Media Foundation decoder
+  capability.
 
 ## Latency
 - Per-frame trace: stamp capture→encode→send→decode→present and surface a real
   glass-to-glass estimate (current HUD input-RTT is only a component).
 - Trigger IDR precisely on client PLI/NACK instead of periodic keyframes
   (already on-demand; wire the client feedback path fully).
-- Consider `playoutDelayHint = 0` on the browser receiver.
+- Keep the native decode queue bounded and tune playout to prefer the newest
+  complete frame.
 
 ## Adaptive bitrate
 - Closed loop from WebRTC `availableOutgoingBitrate`, RTT, and loss into

@@ -125,6 +125,13 @@ export interface ClientConnectRequestMsg {
   /** Normalized 9-digit device id (no spaces). */
   publicDeviceId: string;
 }
+/** Rebind an existing session to a replacement signaling WebSocket after a
+ * transient network interruption. The short-lived token proves ownership. */
+export interface ClientResumeSessionMsg {
+  type: "client-resume-session";
+  sessionId: string;
+  sessionToken: string;
+}
 export interface ClientSignalMsg {
   type: "client-signal";
   sessionId: string;
@@ -147,6 +154,7 @@ export interface ClientSessionEstablishedMsg {
 }
 export type ClientToServer =
   | ClientConnectRequestMsg
+  | ClientResumeSessionMsg
   | ClientSignalMsg
   | ClientSessionEstablishedMsg
   | ClientSessionClosedMsg;

@@ -10,7 +10,7 @@ beats a perfect frame late by 40 ms.
 | Capture (`AcquireNextFrame` + CopyResource) | < 2 ms |
 | NVENC encode | 2–5 ms |
 | Packetize + network (LAN) | 1–5 ms |
-| Browser jitter buffer + decode | 5–15 ms |
+| Native receive + Media Foundation decode | 5–15 ms |
 | Input inject (SendInput) | < 1 ms |
 
 ## Techniques
@@ -29,8 +29,9 @@ beats a perfect frame late by 40 ms.
 
 ## Measured telemetry (never faked — spec §35)
 `PerformanceMonitor` reports capture ms, encode ms, capture FPS, encode FPS, and
-dropped frames from real counters. The browser HUD derives FPS, bitrate, RTT,
-jitter, packet loss, resolution, and codec from the WebRTC `getStats()` API.
+dropped frames from real counters. The native viewer derives its connection
+type from the selected ICE candidate pair and reports input RTT from the
+reliable data-channel ping/pong probe.
 
 ## Suggested starting bitrates
 | Mode | Range |
