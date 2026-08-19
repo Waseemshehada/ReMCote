@@ -4,7 +4,8 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
-#include <shlobj.h>
+#include <objbase.h>  // CoTaskMemFree
+#include <shlobj.h>   // SHGetKnownFolderPath, FOLDERID_LocalAppData
 
 namespace remcote {
 struct DesktopViewer::ViewerInstance {

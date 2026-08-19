@@ -8,8 +8,9 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cwchar>   // std::wcsstr
+#include <cwchar>     // std::wcsstr
 #include <filesystem>
+#include <objbase.h>  // CoInitializeEx, CoUninitialize, CoTaskMemFree (excluded by WIN32_LEAN_AND_MEAN)
 #include <fstream>
 #include <memory>
 #include <string>

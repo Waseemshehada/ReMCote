@@ -5,7 +5,8 @@
 #include <windows.h>
 
 #include <WebView2.h>
-#include <wrl.h>
+#include <wrl/client.h>     // Microsoft::WRL::ComPtr
+#include <wrl/implements.h> // Microsoft::WRL::Callback
 
 namespace remcote {
 
