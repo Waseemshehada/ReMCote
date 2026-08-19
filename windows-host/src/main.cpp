@@ -44,10 +44,35 @@ namespace {
 // practical maximum bitrate is 50 Mbps. Keep a margin below that limit.
 constexpr int kH264Level42MaxFps = 60;
 constexpr int kH264Level42MaxBitrateKbps = 45000;
+constexpr int kH264Level42MaxWidth = 1920;
+constexpr int kH264Level42MaxHeight = 1080;
 
 int EncodeFpsForCapture(int captureHz) {
     return std::min(captureHz > 0 ? captureHz : kH264Level42MaxFps,
                     kH264Level42MaxFps);
+}
+
+EncoderConfig EncoderConfigForCapture(const CaptureEngine& capture) {
+    EncoderConfig config;
+    config.sourceWidth = capture.Width();
+    config.sourceHeight = capture.Height();
+    config.width = config.sourceWidth;
+    config.height = config.sourceHeight;
+
+    if (config.width > kH264Level42MaxWidth ||
+        config.height > kH264Level42MaxHeight) {
+        const double scale = std::min(
+            static_cast<double>(kH264Level42MaxWidth) / config.width,
+            static_cast<double>(kH264Level42MaxHeight) / config.height);
+        config.width = std::max(
+            2, static_cast<int>(config.sourceWidth * scale) & ~1);
+        config.height = std::max(
+            2, static_cast<int>(config.sourceHeight * scale) & ~1);
+    }
+    config.fps = EncodeFpsForCapture(capture.RefreshHz());
+    config.bitrateKbps = 20000;
+    config.maxBitrateKbps = kH264Level42MaxBitrateKbps;
+    return config;
 }
 
 } // namespace
@@ -243,12 +268,15 @@ struct HostApp {
 
     void StartPipeline() {
         if (pipelineRunning.exchange(true)) return;
-        EncoderConfig cfg;
-        cfg.width = capture.Width();
-        cfg.height = capture.Height();
-        cfg.fps = EncodeFpsForCapture(capture.RefreshHz());
-        cfg.bitrateKbps = 20000;
-        cfg.maxBitrateKbps = kH264Level42MaxBitrateKbps;
+        const EncoderConfig cfg = EncoderConfigForCapture(capture);
+        if (cfg.width != cfg.sourceWidth || cfg.height != cfg.sourceHeight) {
+            Logger::Infof(
+                "H.264 Level 4.2 scales encoding from %dx%d to %dx%d",
+                cfg.sourceWidth,
+                cfg.sourceHeight,
+                cfg.width,
+                cfg.height);
+        }
         if (capture.RefreshHz() > cfg.fps) {
             Logger::Infof(
                 "H.264 Level 4.2 caps encoding at %d fps (desktop refresh: %d Hz)",
@@ -430,12 +458,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int) {
         return runViewerOnly(reason.c_str());
     }
 
-    EncoderConfig encoderProbe;
-    encoderProbe.width = app->capture.Width();
-    encoderProbe.height = app->capture.Height();
-    encoderProbe.fps = EncodeFpsForCapture(app->capture.RefreshHz());
-    encoderProbe.bitrateKbps = 20000;
-    encoderProbe.maxBitrateKbps = kH264Level42MaxBitrateKbps;
+    const EncoderConfig encoderProbe = EncoderConfigForCapture(app->capture);
+    if (encoderProbe.width != encoderProbe.sourceWidth ||
+        encoderProbe.height != encoderProbe.sourceHeight) {
+        Logger::Infof(
+            "H.264 Level 4.2 host probe scales %dx%d to %dx%d",
+            encoderProbe.sourceWidth,
+            encoderProbe.sourceHeight,
+            encoderProbe.width,
+            encoderProbe.height);
+    }
     if (app->capture.RefreshHz() > encoderProbe.fps) {
         Logger::Infof(
             "H.264 Level 4.2 host probe uses %d fps (desktop refresh: %d Hz)",

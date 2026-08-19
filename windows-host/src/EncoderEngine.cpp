@@ -45,6 +45,8 @@ bool EncoderEngine::Initialize(
     const EncoderConfig& config) {
     Shutdown();
     config_ = config;
+    if (config_.sourceWidth <= 0) config_.sourceWidth = config_.width;
+    if (config_.sourceHeight <= 0) config_.sourceHeight = config_.height;
     device->GetImmediateContext(context_.GetAddressOf());
 
     hModule_ = LoadLibraryA("nvEncodeAPI64.dll");
@@ -191,6 +193,64 @@ bool EncoderEngine::Initialize(
     }
     inputResource_ = reg.registeredResource;
 
+    const bool needsScaling =
+        config_.sourceWidth != config_.width ||
+        config_.sourceHeight != config_.height;
+    if (needsScaling) {
+        HRESULT hr = device->QueryInterface(
+            IID_PPV_ARGS(videoDevice_.GetAddressOf()));
+        if (SUCCEEDED(hr)) {
+            hr = context_.As(videoContext_.GetAddressOf());
+        }
+        if (FAILED(hr)) {
+            Logger::Errorf(
+                "NVENC GPU scaler initialization failed (0x%08lx)", hr);
+            Shutdown();
+            return false;
+        }
+
+        D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};
+        content.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+        content.InputWidth = config_.sourceWidth;
+        content.InputHeight = config_.sourceHeight;
+        content.OutputWidth = config_.width;
+        content.OutputHeight = config_.height;
+        content.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+        hr = videoDevice_->CreateVideoProcessorEnumerator(
+            &content, videoEnumerator_.GetAddressOf());
+        if (SUCCEEDED(hr)) {
+            hr = videoDevice_->CreateVideoProcessor(
+                videoEnumerator_.Get(), 0, videoProcessor_.GetAddressOf());
+        }
+        if (FAILED(hr)) {
+            Logger::Errorf(
+                "NVENC GPU scaler processor creation failed (0x%08lx)", hr);
+            Shutdown();
+            return false;
+        }
+
+        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC output{};
+        output.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        output.Texture2D.MipSlice = 0;
+        hr = videoDevice_->CreateVideoProcessorOutputView(
+            inputTexture_.Get(),
+            videoEnumerator_.Get(),
+            &output,
+            videoOutputView_.GetAddressOf());
+        if (FAILED(hr)) {
+            Logger::Errorf(
+                "NVENC GPU scaler output view creation failed (0x%08lx)", hr);
+            Shutdown();
+            return false;
+        }
+        Logger::Infof(
+            "NVENC GPU scaler ready: %dx%d -> %dx%d",
+            config_.sourceWidth,
+            config_.sourceHeight,
+            config_.width,
+            config_.height);
+    }
+
     NV_ENC_CREATE_BITSTREAM_BUFFER bs{};
     bs.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
     const NVENCSTATUS bitstreamStatus =
@@ -228,7 +288,60 @@ bool EncoderEngine::SubmitFrame(
     }
 
     const int64_t encodeStart = NowUs();
-    context_->CopyResource(inputTexture_.Get(), frame);
+    if (videoProcessor_) {
+        if (videoInputTexture_.Get() != frame) {
+            D3D11_TEXTURE2D_DESC source{};
+            frame->GetDesc(&source);
+            if (static_cast<int>(source.Width) != config_.sourceWidth ||
+                static_cast<int>(source.Height) != config_.sourceHeight) {
+                Logger::WarningRateLimited(
+                    "nvenc-scaler-source-size",
+                    "Desktop size changed; waiting for the capture pipeline to reinitialize");
+                busy_ = false;
+                return false;
+            }
+            videoInputView_.Reset();
+            videoInputTexture_ = frame;
+            D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC input{};
+            input.FourCC = 0;
+            input.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+            input.Texture2D.MipSlice = 0;
+            input.Texture2D.ArraySlice = 0;
+            const HRESULT inputViewResult =
+                videoDevice_->CreateVideoProcessorInputView(
+                    videoInputTexture_.Get(),
+                    videoEnumerator_.Get(),
+                    &input,
+                    videoInputView_.GetAddressOf());
+            if (FAILED(inputViewResult)) {
+                Logger::WarningRateLimited(
+                    "nvenc-scaler-input-view",
+                    "NVENC GPU scaler could not create an input view");
+                videoInputTexture_.Reset();
+                busy_ = false;
+                return false;
+            }
+        }
+
+        D3D11_VIDEO_PROCESSOR_STREAM stream{};
+        stream.Enable = TRUE;
+        stream.pInputSurface = videoInputView_.Get();
+        const HRESULT scaleResult = videoContext_->VideoProcessorBlt(
+            videoProcessor_.Get(),
+            videoOutputView_.Get(),
+            0,
+            1,
+            &stream);
+        if (FAILED(scaleResult)) {
+            Logger::WarningRateLimited(
+                "nvenc-gpu-scale-frame",
+                "NVENC GPU scaler could not resize a desktop frame");
+            busy_ = false;
+            return false;
+        }
+    } else {
+        context_->CopyResource(inputTexture_.Get(), frame);
+    }
 
     NV_ENC_MAP_INPUT_RESOURCE map{};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
@@ -363,6 +476,13 @@ void EncoderEngine::Shutdown() {
     encoder_ = nullptr;
     inputResource_ = nullptr;
     bitstreamBuffer_ = nullptr;
+    videoInputView_.Reset();
+    videoOutputView_.Reset();
+    videoInputTexture_.Reset();
+    videoProcessor_.Reset();
+    videoEnumerator_.Reset();
+    videoContext_.Reset();
+    videoDevice_.Reset();
     inputTexture_.Reset();
     context_.Reset();
 

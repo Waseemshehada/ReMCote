@@ -19,6 +19,8 @@
 namespace remcote {
 
 struct EncoderConfig {
+    int sourceWidth = 0;
+    int sourceHeight = 0;
     int width = 0;
     int height = 0;
     int fps = 60;
@@ -52,6 +54,13 @@ private:
     void* bitstreamBuffer_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> inputTexture_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+    Microsoft::WRL::ComPtr<ID3D11VideoDevice> videoDevice_;
+    Microsoft::WRL::ComPtr<ID3D11VideoContext> videoContext_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> videoEnumerator_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessor> videoProcessor_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> videoInputView_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> videoOutputView_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> videoInputTexture_;
     EncoderConfig config_{};
     OutputCallback onOutput_;
     std::atomic<bool> busy_{false};   // the 1-frame "queue"
