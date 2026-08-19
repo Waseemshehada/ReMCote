@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ArrowLeft, Terminal, Cpu, ShieldCheck, Download, AlertTriangle } from "lucide-react";
 
 const ZIP_URL = `${import.meta.env.BASE_URL}downloads/remcote-windows-host.zip`;
+// Prebuilt Windows binaries produced by CI from the same source.
+const CI_BUILDS_URL = "https://github.com/Waseemshehada/ReMCote/actions/workflows/build-windows-host.yml";
 // The exact signaling endpoint for THIS deployment of ReMCote.
 const SIGNALING_URL = `wss://${window.location.host}/api/ws`;
 
@@ -29,10 +31,10 @@ export default function DownloadPage() {
           
           <div className="space-y-4">
             <h1 className="text-4xl font-bold tracking-tight text-foreground">
-              Compile and Run the Host
+              Get and Run the Host
             </h1>
             <p className="text-lg text-muted-foreground max-w-2xl leading-relaxed">
-              ReMCote is open-source. For maximum security and performance, there are no pre-compiled binaries. You must build the ReMCote Host from source on your Windows workstation.
+              ReMCote is open-source. Download the prebuilt Windows Host — compiled automatically from the public source by GitHub Actions — or build it from source yourself and verify every line.
             </p>
           </div>
 
@@ -59,7 +61,7 @@ export default function DownloadPage() {
                   </li>
                   <li className="flex items-start gap-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
-                    <span><strong>Build Tools:</strong> Visual Studio 2022 Community (C++ Desktop Development)</span>
+                    <span><strong>Build Tools (source builds only):</strong> Visual Studio 2022 Community (C++ Desktop Development)</span>
                   </li>
                 </ul>
               </CardContent>
@@ -68,12 +70,12 @@ export default function DownloadPage() {
             <Card className="bg-black/40 border-white/10 backdrop-blur-sm">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-foreground">
-                  <ShieldCheck size={20} className="text-success" /> Why build from source?
+                  <ShieldCheck size={20} className="text-success" /> Open source, verifiable builds
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 text-sm text-muted-foreground leading-relaxed">
                 <p>
-                  Remote desktop software requires deep system-level access to capture screens and inject input. By building from source, you can verify exactly what code is running on your workstation.
+                  Remote desktop software requires deep system-level access to capture screens and inject input. The prebuilt package is compiled by GitHub Actions directly from the public source — or build it yourself and verify every line.
                 </p>
                 <p>
                   The media stream never touches our servers. Your video and input are transmitted directly peer-to-peer using WebRTC, secured with DTLS/SRTP end-to-end encryption.
@@ -91,19 +93,29 @@ export default function DownloadPage() {
               
               <div className="relative">
                 <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">1</div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Download the Windows Host Source</h3>
-                <p className="text-muted-foreground text-sm mb-3">A ZIP containing the complete C++ source, CMake files, the automated build script, and build documentation.</p>
-                <Button asChild className="font-semibold">
-                  <a href={ZIP_URL} download>
-                    <Download size={16} className="mr-2" />
-                    Download Windows Host Source (.zip)
-                  </a>
-                </Button>
+                <h3 className="text-lg font-medium text-foreground mb-2">Get the Host</h3>
+                <p className="text-muted-foreground text-sm mb-3">
+                  <strong className="text-foreground">Recommended:</strong> download the prebuilt <code className="text-primary/80">ReMCoteHost-Windows</code> package — open the latest green build and grab it from the <em>Artifacts</em> section. It contains <code className="text-primary/80">ReMCoteHost.exe</code> and all required runtime DLLs. No compiler needed.
+                </p>
+                <div className="flex flex-wrap gap-3 mb-3">
+                  <Button asChild className="font-semibold">
+                    <a href={CI_BUILDS_URL} target="_blank" rel="noreferrer">
+                      <Download size={16} className="mr-2" />
+                      Prebuilt Windows Host (GitHub Actions)
+                    </a>
+                  </Button>
+                  <Button asChild variant="outline" className="font-semibold">
+                    <a href={ZIP_URL} download>
+                      <Download size={16} className="mr-2" />
+                      Source ZIP (build it yourself)
+                    </a>
+                  </Button>
+                </div>
               </div>
 
               <div className="relative">
                 <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">2</div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Build the Host</h3>
+                <h3 className="text-lg font-medium text-foreground mb-2">Build the Host <span className="text-muted-foreground font-normal text-sm">(source ZIP only — skip if you downloaded the prebuilt package)</span></h3>
                 <p className="text-muted-foreground text-sm mb-3">Extract the ZIP, then run the build script from PowerShell. It checks prerequisites, downloads dependencies via vcpkg, and compiles Release x64.</p>
                 <div className="bg-black/60 border border-white/5 rounded-md p-4 font-mono text-sm text-primary-foreground/80 flex items-center gap-3">
                   <Terminal size={16} className="text-muted-foreground" />
@@ -124,11 +136,12 @@ export default function DownloadPage() {
               <div className="relative">
                 <div className="absolute -left-[25px] top-0 w-6 h-6 rounded-full bg-primary/20 border border-primary flex items-center justify-center text-xs font-bold text-primary">4</div>
                 <h3 className="text-lg font-medium text-foreground mb-2">Run & Connect</h3>
-                <p className="text-muted-foreground text-sm mb-3">Start the host. It runs a preflight check, registers, and shows a 9-digit Device ID. Enter that ID on this website from another computer — the host will show an ALLOW prompt.</p>
+                <p className="text-muted-foreground text-sm mb-3">Start the host from the same PowerShell window. It runs a preflight check, registers, and shows a 9-digit Device ID. Enter that ID on this website from another computer — the host will show an ALLOW prompt.</p>
                 <div className="bg-black/60 border border-white/5 rounded-md p-4 font-mono text-sm text-primary-foreground/80 flex items-center gap-3">
                   <Terminal size={16} className="text-muted-foreground" />
-                  <code>.\dist\ReMCoteHost.exe</code>
+                  <code>.\ReMCoteHost.exe</code>
                 </div>
+                <p className="text-muted-foreground text-xs mt-2">(Prebuilt package: the exe is at the top of the extracted folder. Source build: it's at <code className="text-primary/80">.\dist\ReMCoteHost.exe</code>.)</p>
               </div>
 
             </div>
