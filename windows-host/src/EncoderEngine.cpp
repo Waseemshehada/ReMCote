@@ -198,9 +198,9 @@ bool EncoderEngine::Initialize(
         config_.sourceHeight != config_.height;
     if (needsScaling) {
         HRESULT hr = device->QueryInterface(
-            IID_PPV_ARGS(videoDevice_.GetAddressOf()));
+            IID_PPV_ARGS(&videoDevice_));
         if (SUCCEEDED(hr)) {
-            hr = context_.As(videoContext_.GetAddressOf());
+            hr = context_.As(&videoContext_);
         }
         if (FAILED(hr)) {
             Logger::Errorf(
