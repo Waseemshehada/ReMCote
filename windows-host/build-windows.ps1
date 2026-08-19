@@ -89,7 +89,13 @@ function Ensure-PinnedClone {
     } else {
         Write-Host "${Label}: CACHE MISS — cloning $Tag" -ForegroundColor Yellow
     }
-    if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $Dir) {
+        # Use cmd rmdir — more reliable than Remove-Item for git repos
+        # because it handles read-only files that git sets on Windows.
+        Write-Host "  Removing old $Label directory..."
+        cmd /c "rmdir /s /q `"$Dir`""
+        if (Test-Path $Dir) { throw "Could not remove old $Label directory: $Dir" }
+    }
     $parent = Split-Path $Dir
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     git clone --depth 1 --branch $Tag $Url $Dir
