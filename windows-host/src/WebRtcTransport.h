@@ -53,7 +53,6 @@ private:
         std::shared_ptr<rtc::RtpPacketizationConfig> rtpConfig; // for timestamp updates
         std::shared_ptr<rtc::DataChannel> pointerCh;
         std::shared_ptr<rtc::DataChannel> reliableCh;
-        bool trackOpen = false;
         bool answerStarted = false;
         std::atomic<bool> terminalNotified{false};
         std::shared_ptr<CallbackFence> callbackFence{
