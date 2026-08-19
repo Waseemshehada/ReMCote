@@ -150,7 +150,7 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return (LRESULT)GetStockObject(NULL_BRUSH);
     case WM_TIMER:
         if (self->telemetryProvider_) self->UpdateTelemetry(self->telemetryProvider_());
-        InvalidateRect(hwnd, nullptr, FALSE);
+        InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
     case WM_APP_REFRESH_LOG:
         self->logRefreshPending_ = false;
@@ -170,7 +170,7 @@ LRESULT CALLBACK HostUI::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         if (active) SetTimer(hwnd, 1, 1000, nullptr);
         else KillTimer(hwnd, 1);
-        InvalidateRect(hwnd, nullptr, FALSE);
+        InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
     }
     case WM_APP_PEER_DISCONNECTED:
