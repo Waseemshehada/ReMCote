@@ -100,6 +100,7 @@ target_link_libraries(ReMCoteHost PRIVATE
   uuid        # required by WebView2LoaderStatic
   version     # required by WebView2LoaderStatic (GetFileVersionInfo*)
   shlwapi     # required by WebView2LoaderStatic (PathXxx helpers)
+  advapi32    # required by WebView2LoaderStatic (ETW EventXxx + Registry RegXxx)
   "${WEBVIEW2_SDK_DIR}/build/native/x64/WebView2LoaderStatic.lib"
 )
 
