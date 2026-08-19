@@ -68,6 +68,15 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
         if (!s) return;
         if (state == rtc::PeerConnection::State::Connected) {
             Logger::Info("WebRTC peer connected");
+            // Track::onOpen is diagnostic only for a locally-added sendonly
+            // media track. The peer state is the reliable point to request a
+            // new IDR after DTLS-SRTP is ready, including TURN relay sessions.
+            KeyframeRequest keyframe;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                keyframe = keyframeRequest_;
+            }
+            if (keyframe) keyframe();
         }
         if (state == rtc::PeerConnection::State::Disconnected ||
             state == rtc::PeerConnection::State::Failed ||
@@ -164,12 +173,15 @@ bool WebRtcTransport::ConfigureVideoSender(
             if (!lease) return;
             auto session = weakSession.lock();
             if (!session) return;
-            std::lock_guard<std::mutex> lock(mutex_);
-            session->trackOpen = true;
+            KeyframeRequest keyframe;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                keyframe = keyframeRequest_;
+            }
             Logger::Info("WebRTC video track is active");
             // The first IDR can be produced before SRTP opens. Force a fresh
             // one now so the viewer can decode immediately.
-            if (keyframeRequest_) keyframeRequest_();
+            if (keyframe) keyframe();
         });
     }
 
@@ -308,15 +320,28 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
 }
 
 void WebRtcTransport::SendFrame(const EncodedFrame& frame) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (sessions_.empty()) return;
+    struct ActiveVideoTrack {
+        std::shared_ptr<rtc::Track> track;
+        std::shared_ptr<rtc::RtpPacketizationConfig> rtpConfig;
+    };
+    std::vector<ActiveVideoTrack> tracks;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, s] : sessions_) {
+            // Track::onOpen is not guaranteed to fire for a locally-created
+            // sendonly track. isOpen() is the authoritative readiness check.
+            if (s->videoTrack && s->videoTrack->isOpen()) {
+                tracks.push_back({s->videoTrack, s->rtpConfig});
+            }
+        }
+    }
+    if (tracks.empty()) return;
     // Present timestamp in 90 kHz clock units.
     const uint32_t rtpTs = static_cast<uint32_t>(frame.captureUs * 90 / 1000);
-    for (auto& [id, s] : sessions_) {
-        if (!s->videoTrack || !s->trackOpen || !s->videoTrack->isOpen()) continue;
-        if (s->rtpConfig) s->rtpConfig->timestamp = rtpTs;
+    for (const auto& active : tracks) {
+        if (active.rtpConfig) active.rtpConfig->timestamp = rtpTs;
         try {
-            s->videoTrack->send(reinterpret_cast<const std::byte*>(frame.data), frame.size);
+            active.track->send(reinterpret_cast<const std::byte*>(frame.data), frame.size);
             if (!firstFrameSent_.exchange(true)) Logger::Info("First video frame sent over WebRTC");
         } catch (const std::exception& e) {
             Logger::Errorf("WebRTC video-frame send failed: %s", e.what());
