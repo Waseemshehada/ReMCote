@@ -1,6 +1,8 @@
 #include "WebRtcTransport.h"
 #include "Logger.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
@@ -8,8 +10,6 @@ using nlohmann::json;
 
 namespace remcote {
 
-// H.264 payload type for the answered video track.
-static constexpr int kVideoPayloadType = 96;
 static constexpr uint32_t kVideoSsrc = 42;
 
 WebRtcTransport::WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> iceServers)
@@ -19,6 +19,10 @@ WebRtcTransport::WebRtcTransport(InputEngine& input, std::vector<IceServerCfg> i
 
 std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const std::string& sessionId) {
     rtc::Configuration config;
+    // The browser is the offerer. Wait until its offered video m-line has been
+    // received and configured before creating our answer (see onTrack below).
+    // Otherwise libdatachannel generates an answer without our H.264 SSRC.
+    config.disableAutoNegotiation = true;
     for (const auto& cfg : iceServers_) {
         rtc::IceServer srv(cfg.url);
         if (!cfg.username.empty())   srv.username = cfg.username;
@@ -59,6 +63,76 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
     // The browser creates the data channels — we receive them.
     s->pc->onDataChannel([this, s](std::shared_ptr<rtc::DataChannel> dc) {
         WireDataChannel(s, std::move(dc));
+    });
+
+    // libdatachannel creates a reciprocated local Track for every remote media
+    // m-line when setRemoteDescription(offer) runs. Its description preserves
+    // the browser's codec payload types. Reuse that exact H.264 payload type:
+    // a fixed PT is invalid because Chrome commonly assigns PT 96 to VP8.
+    s->pc->onTrack([this, s](std::shared_ptr<rtc::Track> offeredTrack) {
+        rtc::Description::Media media = offeredTrack->description();
+        if (media.type() != "video") return;
+
+        int h264PayloadType = -1;
+        for (const int payloadType : media.payloadTypes()) {
+            const auto* rtpMap = media.rtpMap(payloadType);
+            if (!rtpMap) continue;
+
+            std::string codec = rtpMap->format;
+            std::transform(codec.begin(), codec.end(), codec.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            if (codec == "H264") {
+                h264PayloadType = payloadType;
+                break;
+            }
+        }
+
+        if (h264PayloadType < 0) {
+            Logger::Error("Remote browser did not offer an H.264 video codec");
+            return;
+        }
+
+        bool createAnswer = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (s->videoTrack) return; // ignore any renegotiated duplicate
+
+            // `media` is already the reciprocated (sendonly) description for
+            // the browser's recvonly offer. Adding an SSRC makes it a valid
+            // WebRTC sender in the answer.
+            media.addSSRC(kVideoSsrc, "remcote-video");
+            s->videoTrack = s->pc->addTrack(media);
+            s->rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
+                kVideoSsrc, "remcote-video", h264PayloadType,
+                rtc::H264RtpPacketizer::ClockRate);
+
+            auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
+                rtc::NalUnit::Separator::StartSequence, s->rtpConfig);
+            packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+            s->videoTrack->setMediaHandler(packetizer);
+            s->videoTrack->onOpen([this, s] {
+                std::lock_guard<std::mutex> lock(mutex_);
+                s->trackOpen = true;
+                Logger::Info("WebRTC video track is active");
+                // The first IDR can be produced before SRTP opens. Force a
+                // fresh one now so the browser can decode immediately.
+                if (keyframeRequest_) keyframeRequest_();
+            });
+
+            if (!s->answerStarted) {
+                s->answerStarted = true;
+                createAnswer = true;
+            }
+        }
+
+        Logger::Infof("Negotiated H.264 video track (payload type %d)", h264PayloadType);
+        if (createAnswer) {
+            try {
+                s->pc->setLocalDescription();
+            } catch (const std::exception& e) {
+                Logger::Errorf("WebRTC answer generation failed: %s", e.what());
+            }
+        }
     });
 
     return s;
@@ -149,26 +223,6 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
         auto it = sessions_.find(sessionId);
         if (it == sessions_.end()) {
             s = CreateSession(sessionId);
-            // Add the H.264 video track we will feed from NVENC. Because the
-            // browser offered a recvonly video m-line, this becomes sendonly.
-            rtc::Description::Video media("video", rtc::Description::Direction::SendOnly);
-            media.addH264Codec(kVideoPayloadType);
-            media.addSSRC(kVideoSsrc, "remcote-video");
-            s->videoTrack = s->pc->addTrack(media);
-            auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-                kVideoSsrc, "remcote-video", kVideoPayloadType,
-                rtc::H264RtpPacketizer::ClockRate);
-            s->rtpConfig = rtpConfig;
-            auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
-                rtc::NalUnit::Separator::StartSequence, rtpConfig);
-            packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
-            s->videoTrack->setMediaHandler(packetizer);
-            s->videoTrack->onOpen([s] {
-                s->trackOpen = true;
-                Logger::Info("WebRTC video track is active");
-            });
-            // A NACK / PLI from the client means "send me a keyframe now."
-            s->videoTrack->onMessage([this](rtc::binary) {}, [](rtc::string) {});
             sessions_[sessionId] = s;
         } else {
             s = it->second;
@@ -179,7 +233,8 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
     if (kind == "offer") {
         Logger::Info("WebRTC offer received; creating answer");
         s->pc->setRemoteDescription(rtc::Description(payload.value("sdp", ""), "offer"));
-        // libdatachannel auto-creates the answer via onLocalDescription.
+        // onTrack selects the browser's H.264 payload type, attaches our SSRC,
+        // then explicitly generates the answer.
     } else if (kind == "candidate") {
         std::string cand = payload.value("candidate", "");
         std::string mid = payload.value("sdpMid", "0");

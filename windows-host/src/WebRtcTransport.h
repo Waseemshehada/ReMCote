@@ -52,6 +52,7 @@ private:
         std::shared_ptr<rtc::DataChannel> pointerCh;
         std::shared_ptr<rtc::DataChannel> reliableCh;
         bool trackOpen = false;
+        bool answerStarted = false;
     };
 
     std::shared_ptr<Session> CreateSession(const std::string& sessionId);
