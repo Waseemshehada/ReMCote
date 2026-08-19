@@ -77,7 +77,7 @@ bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl,
         return true;
     }
 
-    hInstance_ = hInstance;
+    hInstance_ = hInstance ? hInstance : GetModuleHandleW(nullptr);
     signalingUrl_ = signalingUrl;
 
     WNDCLASSEXW windowClass{};
@@ -87,7 +87,15 @@ bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl,
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     windowClass.hbrBackground = CreateSolidBrush(RGB(15, 16, 21));
     windowClass.lpszClassName = L"ReMCoteNativeViewerWindow";
-    RegisterClassExW(&windowClass);
+    SetLastError(ERROR_SUCCESS);
+    const ATOM windowClassAtom = RegisterClassExW(&windowClass);
+    const DWORD windowClassError = GetLastError();
+    if (!windowClassAtom && windowClassError != ERROR_CLASS_ALREADY_EXISTS) {
+        Logger::Errorf(
+            "Could not register the native viewer window class (Win32 error %lu)",
+            windowClassError);
+        return false;
+    }
 
     WNDCLASSEXW videoClass{};
     videoClass.cbSize = sizeof(videoClass);
@@ -96,8 +104,17 @@ bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl,
     videoClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     videoClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     videoClass.lpszClassName = L"ReMCoteNativeVideoSurface";
-    RegisterClassExW(&videoClass);
+    SetLastError(ERROR_SUCCESS);
+    const ATOM videoClassAtom = RegisterClassExW(&videoClass);
+    const DWORD videoClassError = GetLastError();
+    if (!videoClassAtom && videoClassError != ERROR_CLASS_ALREADY_EXISTS) {
+        Logger::Errorf(
+            "Could not register the native viewer video class (Win32 error %lu)",
+            videoClassError);
+        return false;
+    }
 
+    SetLastError(ERROR_SUCCESS);
     hwnd_ = CreateWindowExW(
         0,
         windowClass.lpszClassName,
@@ -112,7 +129,10 @@ bool DesktopViewer::Open(HINSTANCE hInstance, const std::string& signalingUrl,
         hInstance_,
         this);
     if (!hwnd_) {
-        Logger::Error("Could not create the native viewer window");
+        const DWORD createError = GetLastError();
+        Logger::Errorf(
+            "Could not create the native viewer window (Win32 error %lu)",
+            createError);
         return false;
     }
 
