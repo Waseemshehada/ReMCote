@@ -110,7 +110,7 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
             "Received remote %s track; configuring the negotiated sender",
             offeredTrack->description().type().c_str());
         if (offeredTrack->description().type() == "video" &&
-            !ConfigureVideoSender(s, offeredTrack->description())) {
+            !ConfigureVideoSender(s, offeredTrack->description().description())) {
             Logger::Error("Failed to configure the negotiated video sender");
         }
     });
@@ -120,7 +120,12 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
 
 bool WebRtcTransport::ConfigureVideoSender(
     const std::shared_ptr<Session>& s,
-    const rtc::Description::Media& offeredVideo) {
+    const std::string& offeredVideoSdp) {
+    rtc::Description::Media offeredVideo(offeredVideoSdp);
+    if (offeredVideo.type() != "video") {
+        Logger::Error("Remote viewer track was not a video m-line");
+        return false;
+    }
 
     int h264PayloadType = -1;
     for (const int payloadType : offeredVideo.payloadTypes()) {
@@ -305,7 +310,7 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
                 Logger::Error("Remote viewer offer did not contain a video m-line");
                 return;
             }
-            if (!ConfigureVideoSender(s, *offeredVideo)) return;
+            if (!ConfigureVideoSender(s, offeredVideo->description())) return;
             s->pc->setLocalDescription();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
