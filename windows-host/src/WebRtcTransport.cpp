@@ -97,16 +97,22 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
         WireDataChannel(s, std::move(dc));
     });
 
-    // A sendrecv remote video track can still arrive here. Native viewers use
-    // recvonly video, however, so they intentionally have no remote sender and
-    // onTrack is not guaranteed to fire. HandlePeerSignal configures the host
-    // sender and produces the answer directly from that recvonly offer.
-    s->pc->onTrack([callbackFence](std::shared_ptr<rtc::Track> offeredTrack) {
+    // libdatachannel creates a reciprocated local Track for the viewer's
+    // recvonly video m-line while applying the offer. Configure the host
+    // sender from that exact track description so the answer reuses the
+    // negotiated mid and codec mapping.
+    s->pc->onTrack([this, weakSession, callbackFence](std::shared_ptr<rtc::Track> offeredTrack) {
         auto lease = callbackFence->TryEnter();
         if (!lease) return;
+        auto s = weakSession.lock();
+        if (!s) return;
         Logger::Debugf(
-            "Received remote %s track; video answer is configured from the offer",
+            "Received remote %s track; configuring the negotiated sender",
             offeredTrack->description().type().c_str());
+        if (offeredTrack->description().type() == "video" &&
+            !ConfigureVideoSender(s, offeredTrack->description())) {
+            Logger::Error("Failed to configure the negotiated video sender");
+        }
     });
 
     return s;
