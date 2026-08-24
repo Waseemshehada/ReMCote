@@ -120,24 +120,11 @@ std::shared_ptr<WebRtcTransport::Session> WebRtcTransport::CreateSession(const s
 
 bool WebRtcTransport::ConfigureVideoSender(
     const std::shared_ptr<Session>& s,
-    const rtc::Description& offer) {
-    const rtc::Description::Media* offeredVideo = nullptr;
-    for (int index = 0; index < offer.mediaCount(); ++index) {
-        const auto entry = offer.media(index);
-        const auto* media = std::get_if<const rtc::Description::Media*>(&entry);
-        if (media && *media && (*media)->type() == "video") {
-            offeredVideo = *media;
-            break;
-        }
-    }
-    if (!offeredVideo) {
-        Logger::Error("Remote viewer offer did not contain a video m-line");
-        return false;
-    }
+    const rtc::Description::Media& offeredVideo) {
 
     int h264PayloadType = -1;
-    for (const int payloadType : offeredVideo->payloadTypes()) {
-        const auto* rtpMap = offeredVideo->rtpMap(payloadType);
+    for (const int payloadType : offeredVideo.payloadTypes()) {
+        const auto* rtpMap = offeredVideo.rtpMap(payloadType);
         if (!rtpMap) continue;
 
         std::string codec = rtpMap->format;
@@ -159,7 +146,7 @@ bool WebRtcTransport::ConfigureVideoSender(
 
         // Preserve the remote offer's m-line and payload mapping while turning
         // the host's side into a valid H.264 sender.
-        rtc::Description::Media answerVideo = *offeredVideo;
+        rtc::Description::Media answerVideo = offeredVideo;
         answerVideo.setDirection(rtc::Description::Direction::SendOnly);
         answerVideo.addSSRC(kVideoSsrc, "remcote-video");
         s->videoTrack = s->pc->addTrack(answerVideo);
@@ -305,7 +292,20 @@ void WebRtcTransport::HandlePeerSignal(const std::string& sessionId, const json&
         try {
             rtc::Description offer(payload.value("sdp", ""), "offer");
             s->pc->setRemoteDescription(offer);
-            if (!ConfigureVideoSender(s, offer)) return;
+            const rtc::Description::Media* offeredVideo = nullptr;
+            for (int index = 0; index < offer.mediaCount(); ++index) {
+                const auto entry = offer.media(index);
+                const auto* media = std::get_if<const rtc::Description::Media*>(&entry);
+                if (media && *media && (*media)->type() == "video") {
+                    offeredVideo = *media;
+                    break;
+                }
+            }
+            if (!offeredVideo) {
+                Logger::Error("Remote viewer offer did not contain a video m-line");
+                return;
+            }
+            if (!ConfigureVideoSender(s, *offeredVideo)) return;
             s->pc->setLocalDescription();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
