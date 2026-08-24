@@ -62,7 +62,7 @@ private:
     std::shared_ptr<Session> CreateSession(const std::string& sessionId);
     bool ConfigureVideoSender(
         const std::shared_ptr<Session>& session,
-        const rtc::Description& offer);
+        const rtc::Description::Media& offeredVideo);
     void WireDataChannel(const std::shared_ptr<Session>& s,
                          std::shared_ptr<rtc::DataChannel> ch);
     void HandleReliableMessage(const std::shared_ptr<Session>& s, const std::string& text);
