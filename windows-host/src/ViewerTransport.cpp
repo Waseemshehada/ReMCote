@@ -55,6 +55,10 @@ void ViewerTransport::Open() {
     // We are the offerer; disable automatic renegotiation so we can control
     // exactly when the offer is generated via setLocalDescription().
     config.disableAutoNegotiation = true;
+    // Keep the native H.264 recvonly m-line backed by an SRTP media
+    // transport. Without this, SCTP data channels can connect while the
+    // media track remains permanently closed.
+    config.forceMediaTransport = true;
     for (const auto& ice : iceServers_) {
         rtc::IceServer srv(ice.url);
         if (!ice.username.empty())   srv.username = ice.username;
